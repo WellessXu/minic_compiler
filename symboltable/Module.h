@@ -114,7 +114,8 @@ public:
     /// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
     /// @param name 变量ID
     /// @param type 变量类型
-    Value * newVarValue(Type * type, std::string name = "");
+    /// @param globalInitializer 全局变量初始化器（仅用于全局变量，可选）
+    Value * newVarValue(Type * type, std::string name = "", Constant* globalInitializer = nullptr);
 
     /// @brief 查找变量（全局变量或局部变量），会根据作用域栈进行逐级查找。
     /// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
@@ -144,9 +145,10 @@ protected:
     /// @brief 新建全局变量，要求name必须有效，并且加入到全局符号表中。
     /// @param type 类型
     /// @param name 名字
+    /// @param initializer 初始化器（可选）
     /// @return Value* 全局变量
     ///
-    GlobalVariable * newGlobalVariable(Type * type, std::string name);
+    GlobalVariable * newGlobalVariable(Type * type, std::string name, Constant* initializer = nullptr);
 
     /// @brief 根据变量名获取当前符号（只管理全局变量）
     /// \param name 变量名

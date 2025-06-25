@@ -41,7 +41,7 @@ statement:
 	| block								# blockStatement
 	| expr? T_SEMICOLON					# expressionStatement;
 
-// 表达式文法 expr : AddExp 表达式目前只支持加法与减法运算
+// 表达式文法 expr : AddExp 表达式支持了加减乘除模余运算
 expr: addExp;
 
 // 加减表达式
@@ -102,3 +102,9 @@ T_DIGIT:
 
 /* 空白符丢弃 */
 WS: [ \r\n\t]+ -> skip;
+
+/* 单行注释丢弃 */
+LINE_COMMENT: '//' ~[\r\n]* -> skip;
+
+/* 多行注释丢弃 */
+BLOCK_COMMENT: '/*' .*? '*/' -> skip;

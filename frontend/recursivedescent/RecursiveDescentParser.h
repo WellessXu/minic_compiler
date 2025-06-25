@@ -37,9 +37,23 @@ enum RDTokenType {
     T_COMMA,
 
     T_RETURN,
+    T_IF,
+    T_ELSE,
 	T_ASSIGN,
 	T_ADD,
     T_SUB,
+    T_MUL,
+    T_DIV,
+    T_MOD,
+    T_GT,
+    T_GE,
+    T_LT,
+    T_LE,
+    T_EQ,
+    T_NE,
+    T_AND,  // 逻辑与 &&
+    T_OR,   // 逻辑或 ||
+    T_NOT,  // 逻辑非 !
 };
 
 /// @brief 词法与语法分析数据交互的Token的值类型

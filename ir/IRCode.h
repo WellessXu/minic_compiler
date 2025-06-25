@@ -46,6 +46,10 @@ public:
     /// @return 指令序列
     std::vector<Instruction *> & getInsts();
 
+    /// @brief 检查指令序列是否以终止指令结束
+    /// @return true 如果以终止指令结束，否则 false
+    bool hasTerminalInst() const;
+
     /// @brief 删除所有指令
     void Delete();
 };

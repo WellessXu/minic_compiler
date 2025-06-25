@@ -1,0 +1,636 @@
+@n = global i32 0, align 4
+@m = global i32 0, align 4
+@f = global [10005 x [20 x i32]] zeroinitializer, align 16
+@dep = global [10005 x i32] zeroinitializer, align 16
+@to = global [10005 x i32] zeroinitializer, align 16
+@next = global [10005 x i32] zeroinitializer, align 16
+@head = global [10005 x i32] zeroinitializer, align 16
+@cnt = global i32 0, align 4
+define i32 @quick_read() {
+	%l0 = alloca i32, align 4
+	%l1 = alloca i32, align 4
+	%l2 = alloca i32, align 4
+	%l3 = alloca i32, align 4
+	%t4 = call i32 (...) @getch()
+	store i32 %t4, i32* %l1, align 4
+	store i32 0, i32* %l2, align 4
+	store i32 0, i32* %l3, align 4
+	br label %.L0
+.L0:
+	%t17 = load i32, i32* %l1, align 4
+	%t5 = icmp slt i32 %t17, 48
+	br i1 %t5, label %.L1, label %.L3
+.L3:
+	%t18 = load i32, i32* %l1, align 4
+	%t6 = icmp sgt i32 %t18, 57
+	br i1 %t6, label %.L1, label %.L6
+.L1:
+	%t19 = load i32, i32* %l1, align 4
+	%t7 = icmp eq i32 %t19, 45
+	br i1 %t7, label %.L4, label %.L5
+.L4:
+	store i32 1, i32* %l3, align 4
+	br label %.L5
+.L5:
+	%t8 = call i32 (...) @getch()
+	store i32 %t8, i32* %l1, align 4
+	br label %.L0
+.L6:
+	%t20 = load i32, i32* %l1, align 4
+	%t9 = icmp sge i32 %t20, 48
+	br i1 %t9, label %.L9, label %.L8
+.L9:
+	%t21 = load i32, i32* %l1, align 4
+	%t10 = icmp sle i32 %t21, 57
+	br i1 %t10, label %.L7, label %.L8
+.L7:
+	%t22 = load i32, i32* %l2, align 4
+	%t11 = mul nsw i32 %t22, 10
+	%t23 = load i32, i32* %l1, align 4
+	%t12 = add nsw i32 %t11, %t23
+	%t13 = sub nsw i32 %t12, 48
+	store i32 %t13, i32* %l2, align 4
+	%t14 = call i32 (...) @getch()
+	store i32 %t14, i32* %l1, align 4
+	br label %.L6
+.L8:
+	%t24 = load i32, i32* %l3, align 4
+	%t15 = icmp ne i32 %t24, 0
+	br i1 %t15, label %.L10, label %.L11
+.L10:
+	%t25 = load i32, i32* %l2, align 4
+	%t16 = sub nsw i32 0, %t25
+	store i32 %t16, i32* %l0, align 4
+	br label %.L30
+.L11:
+	%t26 = load i32, i32* %l2, align 4
+	store i32 %t26, i32* %l0, align 4
+	br label %.L30
+.L30:
+	%t27 = load i32, i32* %l0, align 4
+	ret i32 %t27
+}
+define void @add_edge(i32 %t0, i32 %t1) {
+	%l2 = alloca i32, align 4
+	%l3 = alloca i32, align 4
+	%l4 = alloca i32, align 4
+	store i32 %t0, i32* %l2, align 4
+	store i32 %t1, i32* %l3, align 4
+	%t23 = load i32, i32* @cnt, align 4
+	%t5 = mul nsw i32 %t23, 1
+	%t6 = mul nsw i32 %t5, 4
+	%t24 = getelementptr inbounds [10005 x i32], [10005 x i32]* @to, i64 0, i64 0
+	%t25 = bitcast i32* %t24 to i8*
+	%t27 = sext i32 %t6 to i64
+	%t26 = getelementptr inbounds i8, i8* %t25, i64 %t27
+	%t7 = bitcast i8* %t26 to i32*
+	%t28 = load i32, i32* %l3, align 4
+	store i32 %t28, i32* %t7, align 4
+	%t29 = load i32, i32* %l2, align 4
+	%t8 = mul nsw i32 %t29, 1
+	%t9 = mul nsw i32 %t8, 4
+	%t30 = getelementptr inbounds [10005 x i32], [10005 x i32]* @head, i64 0, i64 0
+	%t31 = bitcast i32* %t30 to i8*
+	%t33 = sext i32 %t9 to i64
+	%t32 = getelementptr inbounds i8, i8* %t31, i64 %t33
+	%t10 = bitcast i8* %t32 to i32*
+	%t34 = load i32, i32* %t10, align 4
+	store i32 %t34, i32* %l4, align 4
+	%t35 = load i32, i32* @cnt, align 4
+	%t11 = mul nsw i32 %t35, 1
+	%t12 = mul nsw i32 %t11, 4
+	%t36 = getelementptr inbounds [10005 x i32], [10005 x i32]* @next, i64 0, i64 0
+	%t37 = bitcast i32* %t36 to i8*
+	%t39 = sext i32 %t12 to i64
+	%t38 = getelementptr inbounds i8, i8* %t37, i64 %t39
+	%t13 = bitcast i8* %t38 to i32*
+	%t40 = load i32, i32* %l4, align 4
+	store i32 %t40, i32* %t13, align 4
+	%t41 = load i32, i32* %l2, align 4
+	%t14 = mul nsw i32 %t41, 1
+	%t15 = mul nsw i32 %t14, 4
+	%t42 = getelementptr inbounds [10005 x i32], [10005 x i32]* @head, i64 0, i64 0
+	%t43 = bitcast i32* %t42 to i8*
+	%t45 = sext i32 %t15 to i64
+	%t44 = getelementptr inbounds i8, i8* %t43, i64 %t45
+	%t16 = bitcast i8* %t44 to i32*
+	%t46 = load i32, i32* @cnt, align 4
+	store i32 %t46, i32* %t16, align 4
+	%t47 = load i32, i32* @cnt, align 4
+	%t17 = add nsw i32 %t47, 1
+	store i32 %t17, i32* @cnt, align 4
+	%t48 = load i32, i32* %l3, align 4
+	%t18 = mul nsw i32 %t48, 20
+	%t19 = mul nsw i32 0, 1
+	%t20 = add nsw i32 %t18, %t19
+	%t21 = mul nsw i32 %t20, 4
+	%t49 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t50 = bitcast i32* %t49 to i8*
+	%t52 = sext i32 %t21 to i64
+	%t51 = getelementptr inbounds i8, i8* %t50, i64 %t52
+	%t22 = bitcast i8* %t51 to i32*
+	%t53 = load i32, i32* %l2, align 4
+	store i32 %t53, i32* %t22, align 4
+	ret void
+}
+define void @init() {
+	%l0 = alloca i32, align 4
+	%t1 = mul nsw i32 0, 1
+	%t2 = mul nsw i32 %t1, 4
+	%t10 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t11 = bitcast i32* %t10 to i8*
+	%t13 = sext i32 %t2 to i64
+	%t12 = getelementptr inbounds i8, i8* %t11, i64 %t13
+	%t3 = bitcast i8* %t12 to i32*
+	store i32 1061109567, i32* %t3, align 4
+	store i32 1, i32* %l0, align 4
+	br label %.L0
+.L0:
+	%t14 = load i32, i32* %l0, align 4
+	%t15 = load i32, i32* @n, align 4
+	%t4 = icmp sle i32 %t14, %t15
+	br i1 %t4, label %.L1, label %.L13
+.L1:
+	%t5 = sub nsw i32 0, 1
+	%t16 = load i32, i32* %l0, align 4
+	%t6 = mul nsw i32 %t16, 1
+	%t7 = mul nsw i32 %t6, 4
+	%t17 = getelementptr inbounds [10005 x i32], [10005 x i32]* @head, i64 0, i64 0
+	%t18 = bitcast i32* %t17 to i8*
+	%t20 = sext i32 %t7 to i64
+	%t19 = getelementptr inbounds i8, i8* %t18, i64 %t20
+	%t8 = bitcast i8* %t19 to i32*
+	store i32 %t5, i32* %t8, align 4
+	%t21 = load i32, i32* %l0, align 4
+	%t9 = add nsw i32 %t21, 1
+	store i32 %t9, i32* %l0, align 4
+	br label %.L0
+.L13:
+	ret void
+}
+define void @tree(i32 %t0, i32 %t1) {
+	%l10 = alloca i32, align 4
+	%l11 = alloca i32, align 4
+	%l2 = alloca i32, align 4
+	%l3 = alloca i32, align 4
+	%l4 = alloca i32, align 4
+	%l5 = alloca i32, align 4
+	%l6 = alloca i32, align 4
+	%l7 = alloca i32, align 4
+	%l8 = alloca i32, align 4
+	%l9 = alloca i32, align 4
+	store i32 %t0, i32* %l2, align 4
+	store i32 %t1, i32* %l3, align 4
+	%t50 = load i32, i32* %l2, align 4
+	%t12 = mul nsw i32 %t50, 1
+	%t13 = mul nsw i32 %t12, 4
+	%t51 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t52 = bitcast i32* %t51 to i8*
+	%t54 = sext i32 %t13 to i64
+	%t53 = getelementptr inbounds i8, i8* %t52, i64 %t54
+	%t14 = bitcast i8* %t53 to i32*
+	%t55 = load i32, i32* %l3, align 4
+	store i32 %t55, i32* %t14, align 4
+	store i32 0, i32* %l4, align 4
+	br label %.L0
+.L0:
+	%t56 = load i32, i32* %l2, align 4
+	%t15 = mul nsw i32 %t56, 20
+	%t57 = load i32, i32* %l4, align 4
+	%t16 = mul nsw i32 %t57, 1
+	%t17 = add nsw i32 %t15, %t16
+	%t18 = mul nsw i32 %t17, 4
+	%t58 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t59 = bitcast i32* %t58 to i8*
+	%t61 = sext i32 %t18 to i64
+	%t60 = getelementptr inbounds i8, i8* %t59, i64 %t61
+	%t19 = bitcast i8* %t60 to i32*
+	%t62 = load i32, i32* %t19, align 4
+	store i32 %t62, i32* %l5, align 4
+	%t63 = load i32, i32* %l5, align 4
+	%t20 = icmp ne i32 %t63, 0
+	br i1 %t20, label %.L1, label %.L2
+.L1:
+	%t64 = load i32, i32* %l2, align 4
+	%t21 = mul nsw i32 %t64, 20
+	%t65 = load i32, i32* %l4, align 4
+	%t22 = mul nsw i32 %t65, 1
+	%t23 = add nsw i32 %t21, %t22
+	%t24 = mul nsw i32 %t23, 4
+	%t66 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t67 = bitcast i32* %t66 to i8*
+	%t69 = sext i32 %t24 to i64
+	%t68 = getelementptr inbounds i8, i8* %t67, i64 %t69
+	%t25 = bitcast i8* %t68 to i32*
+	%t70 = load i32, i32* %t25, align 4
+	store i32 %t70, i32* %l6, align 4
+	%t71 = load i32, i32* %l6, align 4
+	%t26 = mul nsw i32 %t71, 20
+	%t72 = load i32, i32* %l4, align 4
+	%t27 = mul nsw i32 %t72, 1
+	%t28 = add nsw i32 %t26, %t27
+	%t29 = mul nsw i32 %t28, 4
+	%t73 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t74 = bitcast i32* %t73 to i8*
+	%t76 = sext i32 %t29 to i64
+	%t75 = getelementptr inbounds i8, i8* %t74, i64 %t76
+	%t30 = bitcast i8* %t75 to i32*
+	%t77 = load i32, i32* %t30, align 4
+	store i32 %t77, i32* %l7, align 4
+	%t78 = load i32, i32* %l2, align 4
+	%t31 = mul nsw i32 %t78, 20
+	%t79 = load i32, i32* %l4, align 4
+	%t32 = add nsw i32 %t79, 1
+	%t33 = mul nsw i32 %t32, 1
+	%t34 = add nsw i32 %t31, %t33
+	%t35 = mul nsw i32 %t34, 4
+	%t80 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t81 = bitcast i32* %t80 to i8*
+	%t83 = sext i32 %t35 to i64
+	%t82 = getelementptr inbounds i8, i8* %t81, i64 %t83
+	%t36 = bitcast i8* %t82 to i32*
+	%t84 = load i32, i32* %l7, align 4
+	store i32 %t84, i32* %t36, align 4
+	%t85 = load i32, i32* %l4, align 4
+	%t37 = add nsw i32 %t85, 1
+	store i32 %t37, i32* %l4, align 4
+	br label %.L0
+.L2:
+	%t86 = load i32, i32* %l2, align 4
+	%t38 = mul nsw i32 %t86, 1
+	%t39 = mul nsw i32 %t38, 4
+	%t87 = getelementptr inbounds [10005 x i32], [10005 x i32]* @head, i64 0, i64 0
+	%t88 = bitcast i32* %t87 to i8*
+	%t90 = sext i32 %t39 to i64
+	%t89 = getelementptr inbounds i8, i8* %t88, i64 %t90
+	%t40 = bitcast i8* %t89 to i32*
+	%t91 = load i32, i32* %t40, align 4
+	store i32 %t91, i32* %l8, align 4
+	%t92 = load i32, i32* %l8, align 4
+	store i32 %t92, i32* %l4, align 4
+	br label %.L3
+.L3:
+	%t41 = sub nsw i32 0, 1
+	%t93 = load i32, i32* %l4, align 4
+	%t42 = icmp ne i32 %t93, %t41
+	br i1 %t42, label %.L4, label %.L56
+.L4:
+	%t94 = load i32, i32* %l4, align 4
+	%t43 = mul nsw i32 %t94, 1
+	%t44 = mul nsw i32 %t43, 4
+	%t95 = getelementptr inbounds [10005 x i32], [10005 x i32]* @to, i64 0, i64 0
+	%t96 = bitcast i32* %t95 to i8*
+	%t98 = sext i32 %t44 to i64
+	%t97 = getelementptr inbounds i8, i8* %t96, i64 %t98
+	%t45 = bitcast i8* %t97 to i32*
+	%t99 = load i32, i32* %t45, align 4
+	store i32 %t99, i32* %l9, align 4
+	%t100 = load i32, i32* %l9, align 4
+	store i32 %t100, i32* %l10, align 4
+	%t101 = load i32, i32* %l3, align 4
+	%t46 = add nsw i32 %t101, 1
+	%t102 = load i32, i32* %l10, align 4
+	call void @tree(i32 %t102, i32 %t46)
+	%t103 = load i32, i32* %l4, align 4
+	%t47 = mul nsw i32 %t103, 1
+	%t48 = mul nsw i32 %t47, 4
+	%t104 = getelementptr inbounds [10005 x i32], [10005 x i32]* @next, i64 0, i64 0
+	%t105 = bitcast i32* %t104 to i8*
+	%t107 = sext i32 %t48 to i64
+	%t106 = getelementptr inbounds i8, i8* %t105, i64 %t107
+	%t49 = bitcast i8* %t106 to i32*
+	%t108 = load i32, i32* %t49, align 4
+	store i32 %t108, i32* %l11, align 4
+	%t109 = load i32, i32* %l11, align 4
+	store i32 %t109, i32* %l4, align 4
+	br label %.L3
+.L56:
+	ret void
+}
+define i32 @LCA(i32 %t0, i32 %t1) {
+	%l10 = alloca i32, align 4
+	%l11 = alloca i32, align 4
+	%l12 = alloca i32, align 4
+	%l13 = alloca i32, align 4
+	%l14 = alloca i32, align 4
+	%l15 = alloca i32, align 4
+	%l16 = alloca i32, align 4
+	%l17 = alloca i32, align 4
+	%l18 = alloca i32, align 4
+	%l19 = alloca i32, align 4
+	%l2 = alloca i32, align 4
+	%l20 = alloca i32, align 4
+	%l3 = alloca i32, align 4
+	%l4 = alloca i32, align 4
+	%l5 = alloca i32, align 4
+	%l6 = alloca i32, align 4
+	%l7 = alloca i32, align 4
+	%l8 = alloca i32, align 4
+	%l9 = alloca i32, align 4
+	store i32 %t0, i32* %l2, align 4
+	store i32 %t1, i32* %l3, align 4
+	%t87 = load i32, i32* %l2, align 4
+	%t21 = mul nsw i32 %t87, 1
+	%t22 = mul nsw i32 %t21, 4
+	%t88 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t89 = bitcast i32* %t88 to i8*
+	%t91 = sext i32 %t22 to i64
+	%t90 = getelementptr inbounds i8, i8* %t89, i64 %t91
+	%t23 = bitcast i8* %t90 to i32*
+	%t92 = load i32, i32* %t23, align 4
+	store i32 %t92, i32* %l5, align 4
+	%t93 = load i32, i32* %l3, align 4
+	%t24 = mul nsw i32 %t93, 1
+	%t25 = mul nsw i32 %t24, 4
+	%t94 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t95 = bitcast i32* %t94 to i8*
+	%t97 = sext i32 %t25 to i64
+	%t96 = getelementptr inbounds i8, i8* %t95, i64 %t97
+	%t26 = bitcast i8* %t96 to i32*
+	%t98 = load i32, i32* %t26, align 4
+	store i32 %t98, i32* %l6, align 4
+	%t99 = load i32, i32* %l5, align 4
+	%t100 = load i32, i32* %l6, align 4
+	%t27 = icmp slt i32 %t99, %t100
+	br i1 %t27, label %.L0, label %.L1
+.L0:
+	%t101 = load i32, i32* %l2, align 4
+	store i32 %t101, i32* %l7, align 4
+	%t102 = load i32, i32* %l3, align 4
+	store i32 %t102, i32* %l2, align 4
+	%t103 = load i32, i32* %l7, align 4
+	store i32 %t103, i32* %l3, align 4
+	br label %.L1
+.L1:
+	store i32 19, i32* %l8, align 4
+	br label %.L2
+.L2:
+	%t104 = load i32, i32* %l2, align 4
+	%t28 = mul nsw i32 %t104, 1
+	%t29 = mul nsw i32 %t28, 4
+	%t105 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t106 = bitcast i32* %t105 to i8*
+	%t108 = sext i32 %t29 to i64
+	%t107 = getelementptr inbounds i8, i8* %t106, i64 %t108
+	%t30 = bitcast i8* %t107 to i32*
+	%t109 = load i32, i32* %t30, align 4
+	store i32 %t109, i32* %l9, align 4
+	%t110 = load i32, i32* %l3, align 4
+	%t31 = mul nsw i32 %t110, 1
+	%t32 = mul nsw i32 %t31, 4
+	%t111 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t112 = bitcast i32* %t111 to i8*
+	%t114 = sext i32 %t32 to i64
+	%t113 = getelementptr inbounds i8, i8* %t112, i64 %t114
+	%t33 = bitcast i8* %t113 to i32*
+	%t115 = load i32, i32* %t33, align 4
+	store i32 %t115, i32* %l10, align 4
+	%t116 = load i32, i32* %l9, align 4
+	%t117 = load i32, i32* %l10, align 4
+	%t34 = icmp sgt i32 %t116, %t117
+	br i1 %t34, label %.L3, label %.L4
+.L3:
+	%t118 = load i32, i32* %l2, align 4
+	%t35 = mul nsw i32 %t118, 20
+	%t119 = load i32, i32* %l8, align 4
+	%t36 = mul nsw i32 %t119, 1
+	%t37 = add nsw i32 %t35, %t36
+	%t38 = mul nsw i32 %t37, 4
+	%t120 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t121 = bitcast i32* %t120 to i8*
+	%t123 = sext i32 %t38 to i64
+	%t122 = getelementptr inbounds i8, i8* %t121, i64 %t123
+	%t39 = bitcast i8* %t122 to i32*
+	%t124 = load i32, i32* %t39, align 4
+	store i32 %t124, i32* %l11, align 4
+	%t125 = load i32, i32* %l2, align 4
+	%t40 = mul nsw i32 %t125, 20
+	%t126 = load i32, i32* %l8, align 4
+	%t41 = mul nsw i32 %t126, 1
+	%t42 = add nsw i32 %t40, %t41
+	%t43 = mul nsw i32 %t42, 4
+	%t127 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t128 = bitcast i32* %t127 to i8*
+	%t130 = sext i32 %t43 to i64
+	%t129 = getelementptr inbounds i8, i8* %t128, i64 %t130
+	%t44 = bitcast i8* %t129 to i32*
+	%t131 = load i32, i32* %t44, align 4
+	store i32 %t131, i32* %l12, align 4
+	%t132 = load i32, i32* %l12, align 4
+	%t45 = mul nsw i32 %t132, 1
+	%t46 = mul nsw i32 %t45, 4
+	%t133 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t134 = bitcast i32* %t133 to i8*
+	%t136 = sext i32 %t46 to i64
+	%t135 = getelementptr inbounds i8, i8* %t134, i64 %t136
+	%t47 = bitcast i8* %t135 to i32*
+	%t137 = load i32, i32* %t47, align 4
+	store i32 %t137, i32* %l13, align 4
+	%t138 = load i32, i32* %l3, align 4
+	%t48 = mul nsw i32 %t138, 1
+	%t49 = mul nsw i32 %t48, 4
+	%t139 = getelementptr inbounds [10005 x i32], [10005 x i32]* @dep, i64 0, i64 0
+	%t140 = bitcast i32* %t139 to i8*
+	%t142 = sext i32 %t49 to i64
+	%t141 = getelementptr inbounds i8, i8* %t140, i64 %t142
+	%t50 = bitcast i8* %t141 to i32*
+	%t143 = load i32, i32* %t50, align 4
+	store i32 %t143, i32* %l14, align 4
+	%t144 = load i32, i32* %l13, align 4
+	%t145 = load i32, i32* %l14, align 4
+	%t51 = icmp sge i32 %t144, %t145
+	br i1 %t51, label %.L5, label %.L6
+.L5:
+	%t146 = load i32, i32* %l2, align 4
+	%t52 = mul nsw i32 %t146, 20
+	%t147 = load i32, i32* %l8, align 4
+	%t53 = mul nsw i32 %t147, 1
+	%t54 = add nsw i32 %t52, %t53
+	%t55 = mul nsw i32 %t54, 4
+	%t148 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t149 = bitcast i32* %t148 to i8*
+	%t151 = sext i32 %t55 to i64
+	%t150 = getelementptr inbounds i8, i8* %t149, i64 %t151
+	%t56 = bitcast i8* %t150 to i32*
+	%t152 = load i32, i32* %t56, align 4
+	store i32 %t152, i32* %l15, align 4
+	%t153 = load i32, i32* %l15, align 4
+	store i32 %t153, i32* %l2, align 4
+	br label %.L6
+.L6:
+	%t154 = load i32, i32* %l8, align 4
+	%t57 = sub nsw i32 %t154, 1
+	store i32 %t57, i32* %l8, align 4
+	br label %.L2
+.L4:
+	%t155 = load i32, i32* %l2, align 4
+	%t156 = load i32, i32* %l3, align 4
+	%t58 = icmp eq i32 %t155, %t156
+	br i1 %t58, label %.L8, label %.L9
+.L8:
+	%t157 = load i32, i32* %l2, align 4
+	store i32 %t157, i32* %l4, align 4
+	br label %.L102
+.L9:
+	store i32 19, i32* %l8, align 4
+	br label %.L10
+.L10:
+	%t158 = load i32, i32* %l8, align 4
+	%t59 = icmp sge i32 %t158, 0
+	br i1 %t59, label %.L11, label %.L12
+.L11:
+	%t159 = load i32, i32* %l2, align 4
+	%t60 = mul nsw i32 %t159, 20
+	%t160 = load i32, i32* %l8, align 4
+	%t61 = mul nsw i32 %t160, 1
+	%t62 = add nsw i32 %t60, %t61
+	%t63 = mul nsw i32 %t62, 4
+	%t161 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t162 = bitcast i32* %t161 to i8*
+	%t164 = sext i32 %t63 to i64
+	%t163 = getelementptr inbounds i8, i8* %t162, i64 %t164
+	%t64 = bitcast i8* %t163 to i32*
+	%t165 = load i32, i32* %t64, align 4
+	store i32 %t165, i32* %l16, align 4
+	%t166 = load i32, i32* %l3, align 4
+	%t65 = mul nsw i32 %t166, 20
+	%t167 = load i32, i32* %l8, align 4
+	%t66 = mul nsw i32 %t167, 1
+	%t67 = add nsw i32 %t65, %t66
+	%t68 = mul nsw i32 %t67, 4
+	%t168 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t169 = bitcast i32* %t168 to i8*
+	%t171 = sext i32 %t68 to i64
+	%t170 = getelementptr inbounds i8, i8* %t169, i64 %t171
+	%t69 = bitcast i8* %t170 to i32*
+	%t172 = load i32, i32* %t69, align 4
+	store i32 %t172, i32* %l17, align 4
+	%t173 = load i32, i32* %l16, align 4
+	%t174 = load i32, i32* %l17, align 4
+	%t70 = icmp ne i32 %t173, %t174
+	br i1 %t70, label %.L13, label %.L14
+.L13:
+	%t175 = load i32, i32* %l2, align 4
+	%t71 = mul nsw i32 %t175, 20
+	%t176 = load i32, i32* %l8, align 4
+	%t72 = mul nsw i32 %t176, 1
+	%t73 = add nsw i32 %t71, %t72
+	%t74 = mul nsw i32 %t73, 4
+	%t177 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t178 = bitcast i32* %t177 to i8*
+	%t180 = sext i32 %t74 to i64
+	%t179 = getelementptr inbounds i8, i8* %t178, i64 %t180
+	%t75 = bitcast i8* %t179 to i32*
+	%t181 = load i32, i32* %t75, align 4
+	store i32 %t181, i32* %l18, align 4
+	%t182 = load i32, i32* %l18, align 4
+	store i32 %t182, i32* %l2, align 4
+	%t183 = load i32, i32* %l3, align 4
+	%t76 = mul nsw i32 %t183, 20
+	%t184 = load i32, i32* %l8, align 4
+	%t77 = mul nsw i32 %t184, 1
+	%t78 = add nsw i32 %t76, %t77
+	%t79 = mul nsw i32 %t78, 4
+	%t185 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t186 = bitcast i32* %t185 to i8*
+	%t188 = sext i32 %t79 to i64
+	%t187 = getelementptr inbounds i8, i8* %t186, i64 %t188
+	%t80 = bitcast i8* %t187 to i32*
+	%t189 = load i32, i32* %t80, align 4
+	store i32 %t189, i32* %l19, align 4
+	%t190 = load i32, i32* %l19, align 4
+	store i32 %t190, i32* %l3, align 4
+	br label %.L14
+.L14:
+	%t191 = load i32, i32* %l8, align 4
+	%t81 = sub nsw i32 %t191, 1
+	store i32 %t81, i32* %l8, align 4
+	br label %.L10
+.L12:
+	%t192 = load i32, i32* %l2, align 4
+	%t82 = mul nsw i32 %t192, 20
+	%t83 = mul nsw i32 0, 1
+	%t84 = add nsw i32 %t82, %t83
+	%t85 = mul nsw i32 %t84, 4
+	%t193 = getelementptr inbounds [10005 x [20 x i32]], [10005 x [20 x i32]]* @f, i64 0, i64 0, i64 0
+	%t194 = bitcast i32* %t193 to i8*
+	%t196 = sext i32 %t85 to i64
+	%t195 = getelementptr inbounds i8, i8* %t194, i64 %t196
+	%t86 = bitcast i8* %t195 to i32*
+	%t197 = load i32, i32* %t86, align 4
+	store i32 %t197, i32* %l20, align 4
+	%t198 = load i32, i32* %l20, align 4
+	store i32 %t198, i32* %l4, align 4
+	br label %.L102
+.L102:
+	%t199 = load i32, i32* %l4, align 4
+	ret i32 %t199
+}
+define i32 @main() {
+	%l0 = alloca i32, align 4
+	%l1 = alloca i32, align 4
+	%l2 = alloca i32, align 4
+	%l3 = alloca i32, align 4
+	%l4 = alloca i32, align 4
+	%l5 = alloca i32, align 4
+	%t6 = call i32 @quick_read()
+	store i32 %t6, i32* @n, align 4
+	%t7 = call i32 @quick_read()
+	store i32 %t7, i32* @m, align 4
+	call void @init()
+	store i32 1, i32* %l1, align 4
+	br label %.L0
+.L0:
+	%t17 = load i32, i32* %l1, align 4
+	%t18 = load i32, i32* @n, align 4
+	%t8 = icmp ne i32 %t17, %t18
+	br i1 %t8, label %.L1, label %.L2
+.L1:
+	%t9 = call i32 @quick_read()
+	store i32 %t9, i32* %l2, align 4
+	%t10 = call i32 @quick_read()
+	store i32 %t10, i32* %l3, align 4
+	%t19 = load i32, i32* %l2, align 4
+	%t20 = load i32, i32* %l3, align 4
+	call void @add_edge(i32 %t19, i32 %t20)
+	%t21 = load i32, i32* %l1, align 4
+	%t11 = add nsw i32 %t21, 1
+	store i32 %t11, i32* %l1, align 4
+	br label %.L0
+.L2:
+	call void @tree(i32 1, i32 1)
+	br label %.L3
+.L3:
+	%t22 = load i32, i32* @m, align 4
+	%t12 = icmp ne i32 %t22, 0
+	br i1 %t12, label %.L4, label %.L5
+.L4:
+	%t13 = call i32 @quick_read()
+	store i32 %t13, i32* %l4, align 4
+	%t14 = call i32 @quick_read()
+	store i32 %t14, i32* %l5, align 4
+	%t23 = load i32, i32* %l4, align 4
+	%t24 = load i32, i32* %l5, align 4
+	%t15 = call i32 @LCA(i32 %t23, i32 %t24)
+	call void @putint(i32 %t15)
+	call void @putch(i32 10)
+	%t25 = load i32, i32* @m, align 4
+	%t16 = sub nsw i32 %t25, 1
+	store i32 %t16, i32* @m, align 4
+	br label %.L3
+.L5:
+	store i32 0, i32* %l0, align 4
+	%t26 = load i32, i32* %l0, align 4
+	ret i32 %t26
+}
+declare i32 @getint(...);
+declare i32 @getch(...);
+declare void @putint(i32);
+declare void @putch(i32);
+declare void @putstr(i8*);
+declare i32 @getarray(i32*);
+declare void @putarray(i32, i32*);
+declare float @getfloat(...);
+declare void @putfloat(float);
+declare i32 @getfarray(float*);
+declare void @putfarray(i32, float*);

@@ -355,7 +355,7 @@ ast_node * createVarDeclNode(Type * type, var_id_attr & id)
 
     // 创建变量定义节点
     ast_node * decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, type_node, id_node);
-
+	
     // 暂存类型
     decl_node->type = type;
 
@@ -386,6 +386,27 @@ ast_node * create_var_decl_stmt_node(type_attr & type, var_id_attr & id)
     // 插入到变量声明语句
     (void) stmt_node->insert_son_node(decl_node);
 
+    return stmt_node;
+}
+
+///
+/// @brief 创建全局变量声明语句节点，与局部变量声明的区别在于needScope标志
+/// @param type 变量的类型
+/// @param id 变量的名字 
+/// @return ast_node* 全局变量声明语句节点
+///
+ast_node * create_global_var_decl_stmt_node(type_attr & type, var_id_attr & id)
+{
+    // 创建标准变量声明语句
+    ast_node * stmt_node = create_var_decl_stmt_node(type, id);
+    
+    // 设置为全局变量（不需要作用域管理）
+    for (auto child : stmt_node->sons) {
+        if (child->node_type == ast_operator_type::AST_OP_VAR_DECL) {
+            child->needScope = false;
+        }
+    }
+    
     return stmt_node;
 }
 

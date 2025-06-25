@@ -35,8 +35,21 @@ public:
     explicit LabelInstruction(Function * _func);
 
     ///
+    /// @brief 带标签名的构造函数
+    /// @param _func 所属函数
+    /// @param _label_name 标签名称
+    ///
+    LabelInstruction(Function * _func, std::string _label_name);
+
+    ///
     /// @brief 转换成字符串
     /// @param str 返回指令字符串
     ///
     void toString(std::string & str) override;
+
+private:
+    ///
+    /// @brief 标签名称
+    ///
+    std::string label_name;
 };

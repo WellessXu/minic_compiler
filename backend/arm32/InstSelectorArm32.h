@@ -88,6 +88,43 @@ protected:
     /// @param inst IR指令
     void translate_mod_int32(Instruction * inst);
 
+    /// @brief 整数求负指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_neg_int32(Instruction * inst);
+
+    /// @brief 大于比较指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_gt_int32(Instruction * inst);
+
+    /// @brief 大于等于比较指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_ge_int32(Instruction * inst);
+
+    /// @brief 小于比较指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_lt_int32(Instruction * inst);
+
+    /// @brief 小于等于比较指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_le_int32(Instruction * inst);
+
+    /// @brief 等于比较指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_eq_int32(Instruction * inst);
+
+    /// @brief 不等于比较指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_ne_int32(Instruction * inst);
+
+    /// @brief 条件分支指令翻译成ARM32汇编
+    /// @param inst IR指令
+    void translate_bc(Instruction * inst);
+
+    /// @brief 通用比较函数，生成比较指令
+    /// @param inst IR指令
+    /// @param condition 条件代码 (eq, ne, gt, ge, lt, le)
+    void translate_compare(Instruction * inst, const string & condition);
+
     /// @brief 二元操作指令翻译成ARM32汇编
     /// @param inst IR指令
     /// @param operator_name 操作码

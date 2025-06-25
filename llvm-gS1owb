@@ -1,0 +1,60 @@
+@arr = global [2 x i32] zeroinitializer, align 16
+define i32 @main() {
+	%l0 = alloca i32, align 4
+	%l1 = alloca i32, align 4
+	%l2 = alloca i32, align 4
+	%l3 = alloca i32, align 4
+	%t4 = mul nsw i32 0, 1
+	%t5 = mul nsw i32 %t4, 4
+	%t16 = getelementptr inbounds [2 x i32], [2 x i32]* @arr, i64 0, i64 0
+	%t17 = bitcast i32* %t16 to i8*
+	%t19 = sext i32 %t5 to i64
+	%t18 = getelementptr inbounds i8, i8* %t17, i64 %t19
+	%t6 = bitcast i8* %t18 to i32*
+	store i32 1, i32* %t6, align 4
+	%t7 = mul nsw i32 1, 1
+	%t8 = mul nsw i32 %t7, 4
+	%t20 = getelementptr inbounds [2 x i32], [2 x i32]* @arr, i64 0, i64 0
+	%t21 = bitcast i32* %t20 to i8*
+	%t23 = sext i32 %t8 to i64
+	%t22 = getelementptr inbounds i8, i8* %t21, i64 %t23
+	%t9 = bitcast i8* %t22 to i32*
+	store i32 1, i32* %t9, align 4
+	store i32 0, i32* %l1, align 4
+	store i32 0, i32* %l2, align 4
+	br label %.L0
+.L0:
+	%t24 = load i32, i32* %l1, align 4
+	%t10 = icmp slt i32 %t24, 2
+	br i1 %t10, label %.L1, label %.L0
+.L1:
+	%t25 = load i32, i32* %l1, align 4
+	%t11 = mul nsw i32 %t25, 1
+	%t12 = mul nsw i32 %t11, 4
+	%t26 = getelementptr inbounds [2 x i32], [2 x i32]* @arr, i64 0, i64 0
+	%t27 = bitcast i32* %t26 to i8*
+	%t29 = sext i32 %t12 to i64
+	%t28 = getelementptr inbounds i8, i8* %t27, i64 %t29
+	%t13 = bitcast i8* %t28 to i32*
+	%t30 = load i32, i32* %t13, align 4
+	store i32 %t30, i32* %l3, align 4
+	%t31 = load i32, i32* %l2, align 4
+	%t32 = load i32, i32* %l3, align 4
+	%t14 = add nsw i32 %t31, %t32
+	store i32 %t14, i32* %l2, align 4
+	%t33 = load i32, i32* %l1, align 4
+	%t15 = add nsw i32 %t33, 1
+	store i32 %t15, i32* %l1, align 4
+	br label %.L0
+}
+declare i32 @getint(...);
+declare i32 @getch(...);
+declare void @putint(i32);
+declare void @putch(i32);
+declare void @putstr(i8*);
+declare i32 @getarray(i32*);
+declare void @putarray(i32, i32*);
+declare float @getfloat(...);
+declare void @putfloat(float);
+declare i32 @getfarray(float*);
+declare void @putfarray(i32, float*);

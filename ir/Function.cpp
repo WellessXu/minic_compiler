@@ -19,6 +19,9 @@
 
 #include "IRConstant.h"
 #include "Function.h"
+#include "Types/ArrayType.h"
+#include "Types/ArrayParameterType.h"
+#include "Types/PointerType.h"
 
 /// @brief 指定函数名字、函数类型的构造函数
 /// @param _name 函数名称
@@ -91,9 +94,35 @@ void Function::toString(std::string & str)
             str += ", ";
         }
 
-        std::string param_str = param->getType()->toString() + param->getIRName();
-
-        str += param_str;
+        // 检查是否是数组形参类型
+        if (param->getType()->isArrayParameterType()) {
+            ArrayParameterType* arrayParamType = dynamic_cast<ArrayParameterType*>(param->getType());
+            if (arrayParamType) {
+                // 输出格式：元素类型 + 空格 + 参数名 + [0]...[0] (根据维度数量)
+                std::string param_str = arrayParamType->toStringWithName(param->getIRName());
+                str += param_str;
+            } else {
+                // Fallback
+                std::string param_str = param->getType()->toString() + " " + param->getIRName();
+                str += param_str;
+            }
+        }
+        // 对于指针类型的形参（通常是数组形参），输出特殊格式
+        else if (param->getType()->isPointerType()) {
+            PointerType* ptrType = dynamic_cast<PointerType*>(param->getType());
+            if (ptrType) {
+                // 输出格式：元素类型 + 空格 + 参数名 + [0]
+                std::string param_str = ptrType->getPointeeType()->toString() + " " + param->getIRName() + "[0]";
+                str += param_str;
+            } else {
+                 // Fallback or error, though dynamic_cast should succeed if isPointerType is true
+                std::string param_str = param->getType()->toString() + " " + param->getIRName();
+                str += param_str;
+            }
+        } else {
+            std::string param_str = param->getType()->toString() + " " + param->getIRName();
+            str += param_str;
+        }
     }
 
     str += ")\n";
@@ -104,7 +133,38 @@ void Function::toString(std::string & str)
     for (auto & var: this->varsVector) {
 
         // 局部变量和临时变量需要输出declare语句
-        str += "\tdeclare " + var->getType()->toString() + " " + var->getIRName();
+        std::string typeStr = var->getType()->toString();
+        std::string varName = var->getIRName();
+        
+        if (var->getType()->isArrayType()) {
+            ArrayType * arrayType = dynamic_cast<ArrayType *>(var->getType());
+            if (arrayType) {
+                const auto & dimensions = arrayType->getDimensions();
+                for (size_t i = 0; i < dimensions.size(); ++i) {
+                    varName += "[" + std::to_string(dimensions[i]) + "]";
+                }
+                typeStr = arrayType->getElementType()->toString();
+            }
+        }
+        // 如果是指针类型（通常是数组形参对应的局部变量），输出数组格式
+        else if (var->getType()->isPointerType()) {
+            PointerType* ptrType = dynamic_cast<PointerType*>(var->getType());
+            // 检查这个局部变量是否真的是一个函数参数的副本
+            bool isParamRep = false;
+            for (const auto& p : params) {
+                if (p->getName() == var->getName()) {
+                    isParamRep = true;
+                    break;
+                }
+            }
+            if (ptrType && isParamRep) { 
+                typeStr = ptrType->getPointeeType()->toString();
+                varName += "[0]";
+            }
+            // else: it's a regular pointer, not an array-like function parameter representation, print as is.
+        }
+        
+        str += "\tdeclare " + typeStr + " " + varName;
 
         std::string extraStr;
         std::string realName = var->getName();

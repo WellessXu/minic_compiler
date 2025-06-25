@@ -1,0 +1,12 @@
+./build/minic -S [--symbol] [-A | --antlr4 | -D | --recursive-descent] [-T | --ast | -I | --ir] [-o output | --output=output] source
+Options:
+  -h, --help                 Show this help message
+  -o, --output=FILE          Specify output file
+  -S, --symbol               Show symbol information
+  -T, --ast                  Output abstract syntax tree
+  -I, --ir                   Output intermediate representation
+  -A, --antlr4               Use Antlr4 for lexical and syntax analysis
+  -D, --recursive-descent    Use recursive descent parsing
+  -O, --optimize=LEVEL       Set optimization level
+  -t, --target=CPU           Specify target CPU architecture
+  -c, --asmir                Show IR instructions as comments in assembly output

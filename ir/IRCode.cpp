@@ -14,6 +14,7 @@
 /// </table>
 ///
 #include "IRCode.h"
+#include "Instruction.h" // Required for IRInstOperator and getOp()
 
 /// @brief 析构函数
 InterCode::~InterCode()
@@ -25,20 +26,19 @@ InterCode::~InterCode()
 /// @param block 指令块，请注意加入后会自动清空block的指令
 void InterCode::addInst(InterCode & block)
 {
-    std::vector<Instruction *> & insert = block.getInsts();
-
-    code.insert(code.end(), insert.begin(), insert.end());
-
-    // InterCode析构会清理资源，因此移动指令到code中后必须清理，否则会释放多次导致程序例外
-    // 当然，这里也可不清理，但InterCode的析构函数不能清理，需专门的函数清理即可。
-    insert.clear();
+    for (auto inst: block.code) {
+        this->code.push_back(inst);
+    }
+    block.code.clear();
 }
 
 /// @brief 添加一条中间指令
 /// @param inst IR指令
 void InterCode::addInst(Instruction * inst)
 {
-    code.push_back(inst);
+    if (inst) {
+        code.push_back(inst);
+    }
 }
 
 /// @brief 获取指令序列
@@ -62,4 +62,21 @@ void InterCode::Delete()
     }
 
     code.clear();
+}
+
+bool InterCode::hasTerminalInst() const
+{
+    if (code.empty()) {
+        return false;
+    }
+
+    Instruction* lastInst = code.back();
+    if (!lastInst) { // Defensive check, should not happen if insts are managed correctly
+        return false;
+    }
+
+    IRInstOperator op = lastInst->getOp();
+    return op == IRInstOperator::IRINST_OP_EXIT ||
+           op == IRInstOperator::IRINST_OP_GOTO ||
+           op == IRInstOperator::IRINST_OP_BC; // BC is for Branch Conditional
 }

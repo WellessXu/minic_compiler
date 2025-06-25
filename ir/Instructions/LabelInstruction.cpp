@@ -25,9 +25,23 @@ LabelInstruction::LabelInstruction(Function * _func)
     : Instruction(_func, IRInstOperator::IRINST_OP_LABEL, VoidType::getType())
 {}
 
+///
+/// @brief 带标签名的构造函数
+/// @param _func 所属函数
+/// @param _label_name 标签名称
+///
+LabelInstruction::LabelInstruction(Function * _func, std::string _label_name)
+    : Instruction(_func, IRInstOperator::IRINST_OP_LABEL, VoidType::getType()),
+      label_name(_label_name)
+{}
+
 /// @brief 转换成字符串
 /// @param str 返回指令字符串
 void LabelInstruction::toString(std::string & str)
 {
-    str = IRName + ":";
+    if (!label_name.empty()) {
+        str = label_name + ":";
+    } else {
+        str = IRName + ":";
+    }
 }

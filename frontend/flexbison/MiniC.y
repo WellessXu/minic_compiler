@@ -16,6 +16,9 @@
 // LR分析失败时所调用函数的原型声明
 void yyerror(char * msg);
 
+// 用于生成唯一标签的计数器
+static int unique_label_counter = 0;
+
 %}
 
 // 联合体声明，用于后续终结符和非终结符号属性指定使用
@@ -39,17 +42,20 @@ void yyerror(char * msg);
 // %token或%type之后的<>括住的内容成为文法符号的属性，定义在前面的%union中的成员名字。
 %token <integer_num> T_DIGIT
 %token <var_id> T_ID
-%token <type> T_INT
+%token <type> T_INT T_VOID
 
 // 关键或保留字 一词一类 不需要赋予语义属性
-%token T_RETURN
+%token T_RETURN T_IF T_ELSE T_WHILE T_BREAK T_CONTINUE
 
 // 分隔符 一词一类 不需要赋予语义属性
 %token T_SEMICOLON T_L_PAREN T_R_PAREN T_L_BRACE T_R_BRACE
+%token T_L_BRACKET T_R_BRACKET
 %token T_COMMA
 
 // 运算符
-%token T_ASSIGN T_SUB T_ADD
+%token T_ASSIGN T_SUB T_ADD T_MUL T_DIV T_MOD
+%token T_GT T_GE T_LT T_LE T_EQ T_NE
+%token T_AND T_OR T_NOT
 
 // 非终结符
 // %type指定文法的非终结符号，<>可指定文法属性
@@ -63,9 +69,17 @@ void yyerror(char * msg);
 %type <node> LVal
 %type <node> VarDecl VarDeclExpr VarDef
 %type <node> AddExp UnaryExp PrimaryExp
+%type <node> MulExp
 %type <node> RealParamList
+%type <node> RelExp
 %type <type> BasicType
-%type <op_class> AddOp
+%type <op_class> AddOp MulOp RelOp
+%type <node> AndExpr
+%type <node> OrExpr
+%type <node> FormalParamList
+%type <node> FormalParam
+%type <node> ArrayDimensions
+%type <node> ArrayAccess
 %%
 
 // 编译单元可包含若干个函数与全局变量定义。要在语义分析时检查main函数存在
@@ -97,8 +111,8 @@ CompileUnit : FuncDef {
 	}
 	;
 
-// 函数定义，目前支持整数返回类型，不支持形参
-FuncDef : T_INT T_ID T_L_PAREN T_R_PAREN Block  {
+// 函数定义，现在支持带参数的函数
+FuncDef : BasicType T_ID T_L_PAREN T_R_PAREN Block  {
 
 		// 函数返回类型
 		type_attr funcReturnType = $1;
@@ -115,6 +129,68 @@ FuncDef : T_INT T_ID T_L_PAREN T_R_PAREN Block  {
 		// 创建函数定义的节点，孩子有类型，函数名，语句块和形参(实际上无)
 		// create_func_def函数内会释放funcId中指向的标识符空间，切记，之后不要再释放，之前一定要是通过strdup函数或者malloc分配的空间
 		$$ = create_func_def(funcReturnType, funcId, blockNode, formalParamsNode);
+	}
+	| BasicType T_ID T_L_PAREN FormalParamList T_R_PAREN Block {
+		// 函数返回类型
+		type_attr funcReturnType = $1;
+
+		// 函数名
+		var_id_attr funcId = $2;
+
+		// 函数体节点即Block，即$6
+		ast_node * blockNode = $6;
+
+		// 形参节点，即$4
+		ast_node * formalParamsNode = $4;
+
+		// 创建函数定义的节点，孩子有类型，函数名，语句块和形参
+		$$ = create_func_def(funcReturnType, funcId, blockNode, formalParamsNode);
+	}
+	;
+
+// 形参列表支持逗号分隔的若干个形参
+FormalParamList : FormalParam {
+		// 创建形参列表节点，并把当前的形参节点加入
+		$$ = create_contain_node(ast_operator_type::AST_OP_FUNC_FORMAL_PARAMS, $1);
+	}
+	| FormalParamList T_COMMA FormalParam {
+		// 左递归增加形参
+		$$ = $1->insert_son_node($3);
+	}
+	;
+
+// 形参定义
+FormalParam : BasicType T_ID {
+		// 形参类型
+		type_attr paramType = $1;
+
+		// 形参名
+		var_id_attr paramId = $2;
+
+		// 创建形参节点
+		ast_node * type_node = create_type_node(paramType);
+		ast_node * id_node = ast_node::New(std::string(paramId.id), paramId.lineno);
+		
+		// 对于字符型字面量的字符串空间需要释放
+		free(paramId.id);
+		
+		// 创建形参节点，包含类型和名称
+		$$ = create_contain_node(ast_operator_type::AST_OP_FUNC_FORMAL_PARAM, type_node, id_node);
+	}
+	| BasicType T_ID ArrayDimensions {
+		// 数组形参定义
+		type_attr paramType = $1;
+		var_id_attr paramId = $2;
+		
+		// 创建形参节点
+		ast_node * type_node = create_type_node(paramType);
+		ast_node * id_node = ast_node::New(std::string(paramId.id), paramId.lineno);
+		
+		// 对于字符型字面量的字符串空间需要释放
+		free(paramId.id);
+		
+		// 创建数组形参节点，包含类型、名称和维度信息
+		$$ = create_contain_node(ast_operator_type::AST_OP_FUNC_FORMAL_PARAM_ARRAY, type_node, id_node, $3);
 	}
 	;
 
@@ -175,25 +251,64 @@ VarDecl : VarDeclExpr T_SEMICOLON {
 // 变量声明表达式，可支持逗号分隔定义多个
 VarDeclExpr: BasicType VarDef {
 
-		// 创建类型节点
-		ast_node * type_node = create_type_node($1);
+		ast_node * type_node = create_type_node($1); // $1 is BasicType
+        ast_node * def_result_node = $2;             // $2 is from VarDef
+        ast_node * id_or_array_node;
+        ast_node * init_expr_node = nullptr;
 
-		// 创建变量定义节点
-		ast_node * decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, type_node, $2);
+        if (def_result_node->node_type == ast_operator_type::AST_OP_ASSIGN) {
+            // It's an ID with an initializer, packed in a temporary ASSIGN node
+            id_or_array_node = def_result_node->sons[0];
+            init_expr_node = def_result_node->sons[1];
+            def_result_node->sons.clear(); // Detach children before deleting parent
+            ast_node::Delete(def_result_node); // Delete the temporary ASSIGN node
+        } else {
+            // It's a simple ID or an ARRAY_DEF
+            id_or_array_node = def_result_node;
+        }
 
-		// 创建变量声明语句，并加入第一个变量
-		$$ = create_var_decl_stmt_node(decl_node);
+        ast_node * decl_node; // This will be AST_OP_VAR_DECL
+        if (init_expr_node) {
+            decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, type_node, id_or_array_node, init_expr_node);
+        } else {
+            decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, type_node, id_or_array_node);
+        }
+        decl_node->type = type_node->type; // Set the type on the AST_OP_VAR_DECL node itself
+        
+        $$ = create_var_decl_stmt_node(decl_node);
+        if ($$) { // Ensure create_var_decl_stmt_node returned a node
+             ($$)->type = type_node->type; // Explicitly set type for the statement node
+        }
 	}
 	| VarDeclExpr T_COMMA VarDef {
 
-		// 创建类型节点，这里从VarDeclExpr获取类型，前面已经设置
-		ast_node * type_node = ast_node::New($1->type);
+        Type * common_type_for_stmt = $1->type; // Corrected type to Type*
 
-		// 创建变量定义节点
-		ast_node * decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, type_node, $3);
+        ast_node * def_result_node = $3; // Result from the current VarDef
+        ast_node * id_or_array_node;
+        ast_node * init_expr_node = nullptr;
 
-		// 插入到变量声明语句
-		$$ = $1->insert_son_node(decl_node);
+        if (def_result_node->node_type == ast_operator_type::AST_OP_ASSIGN) {
+            id_or_array_node = def_result_node->sons[0];
+            init_expr_node = def_result_node->sons[1];
+            def_result_node->sons.clear();
+            ast_node::Delete(def_result_node);
+        } else {
+            id_or_array_node = def_result_node;
+        }
+
+        // Each AST_OP_VAR_DECL needs its own type node instance, created from the common Type*
+        ast_node * current_type_node = ast_node::New(common_type_for_stmt); // Should now call ast_node::New(Type*)
+
+        ast_node * decl_node; // This is an AST_OP_VAR_DECL for the current variable
+        if (init_expr_node) {
+            decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, current_type_node, id_or_array_node, init_expr_node);
+        } else {
+            decl_node = create_contain_node(ast_operator_type::AST_OP_VAR_DECL, current_type_node, id_or_array_node);
+        }
+        decl_node->type = current_type_node->type; // Set type for this specific VAR_DECL
+
+        $$ = $1->insert_son_node(decl_node); // Add to existing AST_OP_DECL_STMT
 	}
 	;
 
@@ -206,13 +321,30 @@ VarDef : T_ID {
 		// 对于字符型字面量的字符串空间需要释放，因词法用到了strdup进行了字符串复制
 		free($1.id);
 	}
+	| T_ID ArrayDimensions {
+		// 数组变量定义
+		
+		// 创建变量名节点
+		ast_node * var_node = ast_node::New(var_id_attr{$1.id, $1.lineno});
+		
+		// 对于字符型字面量的字符串空间需要释放
+		free($1.id);
+		
+		// 创建数组定义节点，包含变量名和维度信息
+		$$ = create_contain_node(ast_operator_type::AST_OP_ARRAY_DEF, var_node, $2);
+	}
+    | T_ID T_ASSIGN Expr { // New production for initialization
+        ast_node * id_node = ast_node::New(var_id_attr{$1.id, $1.lineno});
+        free($1.id); // free the strduped id
+        // Temporarily use AST_OP_ASSIGN to package id_node and expr_node ($3)
+        $$ = create_contain_node(ast_operator_type::AST_OP_ASSIGN, id_node, $3);
+    }
 	;
 
 // 基本类型，目前只支持整型
-BasicType: T_INT {
-		$$ = $1;
-	}
-	;
+BasicType: T_INT { $$ = $1; }
+         | T_VOID { $$ = $1; }
+         ;
 
 // 语句文法：statement:T_RETURN expr T_SEMICOLON | lVal T_ASSIGN expr T_SEMICOLON
 // | block | expr? T_SEMICOLON
@@ -223,6 +355,10 @@ Statement : T_RETURN Expr T_SEMICOLON {
 
 		// 创建返回节点AST_OP_RETURN，其孩子为Expr，即$2
 		$$ = create_contain_node(ast_operator_type::AST_OP_RETURN, $2);
+	}
+	| T_RETURN T_SEMICOLON {
+		// 创建一个没有子节点的返回节点 AST_OP_RETURN
+		$$ = create_contain_node(ast_operator_type::AST_OP_RETURN);
 	}
 	| LVal T_ASSIGN Expr T_SEMICOLON {
 		// 赋值语句
@@ -248,13 +384,134 @@ Statement : T_RETURN Expr T_SEMICOLON {
 		// 直接返回空指针，需要再把语句加入到语句块时要注意判断，空语句不要加入
 		$$ = nullptr;
 	}
+	| T_IF T_L_PAREN Expr T_R_PAREN Statement {
+		// IF语句
+		
+		// 为条件表达式生成唯一的真假出口标签
+		std::string true_label = ".L" + std::to_string(unique_label_counter++);
+		std::string false_label = ".L" + std::to_string(unique_label_counter++);
+		
+		// 设置条件表达式的真假出口标签
+		$3->true_label = true_label;  // 真出口，执行语句
+		$3->false_label = false_label; // 假出口，跳过语句
+		
+		// 创建IF语句节点，包含条件表达式和语句
+		$$ = create_contain_node(ast_operator_type::AST_OP_IF, $3, $5);
+	}
+	| T_IF T_L_PAREN Expr T_R_PAREN Statement T_ELSE Statement {
+		// IF-ELSE语句
+		
+		// 为条件表达式生成唯一的真假出口标签
+		std::string true_label = ".L" + std::to_string(unique_label_counter++);
+		std::string false_label = ".L" + std::to_string(unique_label_counter++);
+		std::string end_label = ".L" + std::to_string(unique_label_counter++);
+		
+		// 设置条件表达式的真假出口标签
+		$3->true_label = true_label;  // 真出口，执行IF语句
+		$3->false_label = false_label; // 假出口，执行ELSE语句
+		
+		// 创建IF-ELSE语句节点，包含条件表达式、IF语句和ELSE语句
+		$$ = create_contain_node(ast_operator_type::AST_OP_IF_ELSE, $3, $5, $7);
+	}
+	| T_WHILE T_L_PAREN Expr T_R_PAREN Statement {
+		// WHILE循环语句
+		
+		// 为条件表达式生成唯一的循环入口、循环体和循环结束标签
+		std::string loop_start_label_parser_hint = ".L" + std::to_string(unique_label_counter++);
+		std::string loop_body_label_parser_hint = ".L" + std::to_string(unique_label_counter++);
+		std::string loop_end_label_parser_hint = ".L" + std::to_string(unique_label_counter++);
+		
+		// 设置条件表达式的真假出口标签 (these are hints for the condition node itself)
+		$3->true_label = loop_body_label_parser_hint;
+		$3->false_label = loop_end_label_parser_hint;
+		
+		// 创建WHILE语句节点，包含条件表达式和循环体语句
+		ast_node* while_node = create_contain_node(ast_operator_type::AST_OP_WHILE, $3, $5);
+		
+		$$ = while_node;
+	}
+	| T_BREAK T_SEMICOLON {
+		// BREAK语句
+		$$ = create_contain_node(ast_operator_type::AST_OP_BREAK);
+	}
+	| T_CONTINUE T_SEMICOLON {
+		// CONTINUE语句
+		$$ = create_contain_node(ast_operator_type::AST_OP_CONTINUE);
+	}
 	;
 
 // 表达式文法 expr : AddExp
 // 表达式目前只支持加法与减法运算
-Expr : AddExp {
-		// 直接传递给归约后的节点
+Expr : OrExpr {
 		$$ = $1;
+	}
+	;
+
+// 逻辑或表达式文法：orExpr: andExpr (T_OR andExpr)*
+// 由于bison不支持用闭包表达，需要拆分成左递归的形式
+OrExpr : AndExpr {
+		$$ = $1;
+	}
+	| AndExpr T_OR AndExpr {
+		$$ = create_contain_node(ast_operator_type::AST_OP_OR, $1, $3);
+	}
+	| OrExpr T_OR AndExpr {
+		$$ = create_contain_node(ast_operator_type::AST_OP_OR, $1, $3);
+	}
+	;
+
+// 逻辑与表达式文法：andExpr: relExpr (T_AND relExpr)*
+// 由于bison不支持用闭包表达，需要拆分成左递归的形式
+AndExpr : RelExp {
+		$$ = $1;
+	}
+	| RelExp T_AND RelExp {
+		$$ = create_contain_node(ast_operator_type::AST_OP_AND, $1, $3);
+	}
+	| AndExpr T_AND RelExp {
+		$$ = create_contain_node(ast_operator_type::AST_OP_AND, $1, $3);
+	}
+	;
+
+// 关系表达式文法：relExp: addExp (relOp addExp)*
+// 由于bison不支持用闭包表达，因此需要拆分成左递归的形式
+// 改造后的左递归文法：
+// relExp : addExp | addExp relOp addExp | relExp relOp addExp
+RelExp : AddExp {
+		// 加减表达式
+		// 直接传递到归约后的节点
+		$$ = $1;
+	}
+	| AddExp RelOp AddExp {
+		// 算术表达式 + 关系运算 + 算术表达式
+		// 创建关系运算节点，孩子为两个算术表达式节点
+		$$ = create_contain_node(ast_operator_type($2), $1, $3);
+	}
+	| RelExp RelOp AddExp {
+		// 关系表达式 + 关系运算 + 算术表达式
+		// 创建关系运算节点，孩子为关系表达式和算术表达式
+		$$ = create_contain_node(ast_operator_type($2), $1, $3);
+	}
+	;
+
+// 关系运算符
+RelOp: T_GT {
+		$$ = (int)ast_operator_type::AST_OP_GT;
+	}
+	| T_GE {
+		$$ = (int)ast_operator_type::AST_OP_GE;
+	}
+	| T_LT {
+		$$ = (int)ast_operator_type::AST_OP_LT;
+	}
+	| T_LE {
+		$$ = (int)ast_operator_type::AST_OP_LE;
+	}
+	| T_EQ {
+		$$ = (int)ast_operator_type::AST_OP_EQ;
+	}
+	| T_NE {
+		$$ = (int)ast_operator_type::AST_OP_NE;
 	}
 	;
 
@@ -262,22 +519,19 @@ Expr : AddExp {
 // 由于bison不支持用闭包表达，因此需要拆分成左递归的形式
 // 改造后的左递归文法：
 // addExp : unaryExp | unaryExp addOp unaryExp | addExp addOp unaryExp
-AddExp : UnaryExp {
-		// 一目表达式
-
+AddExp : MulExp {
+		// 乘除模表达式
 		// 直接传递到归约后的节点
 		$$ = $1;
 	}
-	| UnaryExp AddOp UnaryExp {
-		// 两个一目表达式的加减运算
-
-		// 创建加减运算节点，其孩子为两个一目表达式节点
+	| MulExp AddOp MulExp {
+		// 两个乘除模表达式的加减运算
+		// 创建加减运算节点，其孩子为两个乘除模表达式节点
 		$$ = create_contain_node(ast_operator_type($2), $1, $3);
 	}
-	| AddExp AddOp UnaryExp {
-		// 左递归形式可通过加减连接多个一元表达式
-
-		// 创建加减运算节点，孩子为AddExp($1)和UnaryExp($3)
+	| AddExp AddOp MulExp {
+		// 左递归形式可通过加减连接多个乘除模表达式
+		// 创建加减运算节点，孩子为AddExp($1)和MulExp($3)
 		$$ = create_contain_node(ast_operator_type($2), $1, $3);
 	}
 	;
@@ -291,10 +545,44 @@ AddOp: T_ADD {
 	}
 	;
 
+// 乘除模表达式文法：mulExp: unaryExp (mulOp unaryExp)*
+// 由于bison不支持用闭包表达，因此需要拆分成左递归的形式
+// 改造后的左递归文法：
+// mulExp : unaryExp | unaryExp mulOp unaryExp | mulExp mulOp unaryExp
+MulExp : UnaryExp {
+		// 一元表达式
+		// 直接传递到归约后的节点
+		$$ = $1;
+	}
+	| UnaryExp MulOp UnaryExp {
+		// 两个一元表达式的乘除模运算
+		// 创建乘除模运算节点，其孩子为两个一元表达式节点
+		$$ = create_contain_node(ast_operator_type($2), $1, $3);
+	}
+	| MulExp MulOp UnaryExp {
+		// 左递归形式可通过乘除模连接多个一元表达式
+		// 创建乘除模运算节点，孩子为MulExp($1)和UnaryExp($3)
+		$$ = create_contain_node(ast_operator_type($2), $1, $3);
+	}
+	;
+
+// 乘除模运算符
+MulOp: T_MUL {
+		$$ = (int)ast_operator_type::AST_OP_MUL;
+	}
+	| T_DIV {
+		$$ = (int)ast_operator_type::AST_OP_DIV;
+	}
+	| T_MOD {
+		$$ = (int)ast_operator_type::AST_OP_MOD;
+	}
+	;
+
 // 目前一元表达式可以为基本表达式、函数调用，其中函数调用的实参可有可无
 // 其文法为：unaryExp: primaryExp | T_ID T_L_PAREN realParamList? T_R_PAREN
 // 由于bison不支持？表达，因此变更后的文法为：
-// unaryExp: primaryExp | T_SUB unaryExp | T_ID T_L_PAREN T_R_PAREN | T_ID T_L_PAREN realParamList T_R_PAREN
+// unaryExp: primaryExp | T_ID T_L_PAREN T_R_PAREN | T_ID T_L_PAREN realParamList T_R_PAREN
+// 新增：支持逻辑非运算 T_NOT unaryExp
 UnaryExp : PrimaryExp {
 		// 基本表达式
 
@@ -305,7 +593,13 @@ UnaryExp : PrimaryExp {
 		// 求负运算
 		
 		// 创建求负运算节点
-		$$ = ast_node::New(ast_operator_type::AST_OP_NEG, $2, nullptr, nullptr);
+		$$ = create_contain_node(ast_operator_type::AST_OP_NEG, $2);
+	}
+	| T_NOT UnaryExp {
+		// 逻辑非运算
+		
+		// 创建逻辑非运算节点
+		$$ = create_contain_node(ast_operator_type::AST_OP_NOT, $2);
 	}
 	| T_ID T_L_PAREN T_R_PAREN {
 		// 没有实参的函数调用
@@ -383,6 +677,48 @@ LVal : T_ID {
 
 		// 对于字符型字面量的字符串空间需要释放，因词法用到了strdup进行了字符串复制
 		free($1.id);
+	}
+	| ArrayAccess {
+		// 数组访问表达式
+		$$ = $1;
+	}
+	;
+
+// 数组维度定义，支持多维数组
+ArrayDimensions : T_L_BRACKET T_DIGIT T_R_BRACKET {
+		// 一维数组
+		ast_node * dim_node = ast_node::New($2);
+		$$ = create_contain_node(ast_operator_type::AST_OP_ARRAY_DIMENSIONS, dim_node);
+	}
+	| T_L_BRACKET T_R_BRACKET {
+		// 空维度数组（用于函数形参）
+		ast_node * dim_node = ast_node::New(digit_int_attr{0, yylineno}); // 使用0表示空维度
+		$$ = create_contain_node(ast_operator_type::AST_OP_ARRAY_DIMENSIONS, dim_node);
+	}
+	| ArrayDimensions T_L_BRACKET T_DIGIT T_R_BRACKET {
+		// 多维数组，左递归添加维度
+		ast_node * dim_node = ast_node::New($3);
+		$$ = $1->insert_son_node(dim_node);
+	}
+	| ArrayDimensions T_L_BRACKET T_R_BRACKET {
+		// 多维数组的空维度
+		ast_node * dim_node = ast_node::New(digit_int_attr{0, yylineno}); // 使用0表示空维度
+		$$ = $1->insert_son_node(dim_node);
+	}
+	;
+
+// 数组访问表达式
+ArrayAccess : T_ID T_L_BRACKET Expr T_R_BRACKET {
+		// 一维数组访问
+		ast_node * var_node = ast_node::New($1);
+		free($1.id);
+		
+		// 创建数组访问节点，包含数组名和索引表达式
+		$$ = create_contain_node(ast_operator_type::AST_OP_ARRAY_ACCESS, var_node, $3);
+	}
+	| ArrayAccess T_L_BRACKET Expr T_R_BRACKET {
+		// 多维数组访问，左递归添加索引
+		$$ = $1->insert_son_node($3);
 	}
 	;
 

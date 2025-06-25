@@ -101,6 +101,60 @@ enum class ast_operator_type : int {
     /// @brief 二元运算符%
     AST_OP_MOD,
 
+    /// @brief 关系运算符 >
+    AST_OP_GT,
+    
+    /// @brief 关系运算符 >=
+    AST_OP_GE,
+    
+    /// @brief 关系运算符 <
+    AST_OP_LT,
+    
+    /// @brief 关系运算符 <=
+    AST_OP_LE,
+    
+    /// @brief 关系运算符 ==
+    AST_OP_EQ,
+    
+    /// @brief 关系运算符 !=
+    AST_OP_NE,
+
+    /// @brief IF语句
+    AST_OP_IF,
+    
+    /// @brief IF-ELSE语句
+    AST_OP_IF_ELSE,
+
+    /// @brief 逻辑与运算符 &&
+    AST_OP_AND,
+    
+    /// @brief 逻辑或运算符 ||
+    AST_OP_OR,
+    
+    /// @brief 逻辑非运算符 !
+    AST_OP_NOT,
+
+    /// @brief WHILE循环语句
+    AST_OP_WHILE,
+    
+    /// @brief BREAK语句
+    AST_OP_BREAK,
+    
+    /// @brief CONTINUE语句
+    AST_OP_CONTINUE,
+
+    /// @brief 数组定义运算符
+    AST_OP_ARRAY_DEF,
+    
+    /// @brief 数组维度运算符
+    AST_OP_ARRAY_DIMENSIONS,
+    
+    /// @brief 数组访问运算符
+    AST_OP_ARRAY_ACCESS,
+    
+    /// @brief 数组形参运算符
+    AST_OP_FUNC_FORMAL_PARAM_ARRAY,
+
     // TODO 抽象语法树其它内部节点运算符追加
 
     /// @brief 最大标识符，表示非法运算符
@@ -146,6 +200,18 @@ public:
     /// @brief 在进入block等节点时是否要进行作用域管理。默认要做。
     ///
     bool needScope = true;
+
+    /// @brief 关系表达式的真出口标签
+    std::string true_label;
+    
+    /// @brief 关系表达式的假出口标签
+    std::string false_label;
+    
+    /// @brief 循环开始标签，用于continue跳转
+    std::string loop_start_label;
+    
+    /// @brief 循环结束标签，用于break跳转
+    std::string loop_end_label;
 
     /// @brief 创建指定节点类型的节点
     /// @param _node_type 节点类型
@@ -284,6 +350,14 @@ ast_node * create_var_decl_stmt_node(ast_node * first_child);
 /// @return ast_node* 变量声明语句节点
 ///
 ast_node * create_var_decl_stmt_node(type_attr & type, var_id_attr & id);
+
+///
+/// @brief 创建全局变量声明语句节点，与局部变量声明的区别在于needScope标志
+/// @param type 变量的类型
+/// @param id 变量的名字
+/// @return ast_node* 全局变量声明语句节点
+///
+ast_node * create_global_var_decl_stmt_node(type_attr & type, var_id_attr & id);
 
 ///
 /// @brief 向变量声明语句中追加变量声明

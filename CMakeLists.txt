@@ -10,9 +10,9 @@ set(BISON_OUTPUT_GRAPH OFF CACHE BOOL "Enable/Disable output of a graph of the a
 # 是否使用GravphViz库
 set(USE_GRAPHVIZ ON CACHE BOOL "Enable/Disable GraphViz")
 
-# 默认设置为ON，这里可注释掉。开启时会产生compile_commands.json的文件，有了这个文件才能识别出clang-tidy的配置
+# 开启时会产生compile_commands.json的文件，有了这个文件才能识别出clang-tidy的配置
 # Generates a `compile_commands.json` that can be used for autocompletion
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Enable/Disable output of compile commands during generation.")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 这个目前没有用处，可删除
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -47,7 +47,8 @@ find_package(FLEX REQUIRED)
 find_package(BISON REQUIRED)
 
 # 设置antlr-4.12.0-complete的位置
-set(ANTLR4_JAR_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/antlr4/antlr-4.12.0-complete.jar)
+set(ANTLR4_VERSION 4.12.0 CACHE STRING "ANTLR4 version")
+set(ANTLR4_JAR_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/antlr4/antlr-${ANTLR4_VERSION}-complete.jar)
 
 # 查找antlr4-runtime包是否存在，若不存在则出错。目的用于本程序与Antlr4进行链接
 find_package(ANTLR4 REQUIRED)
@@ -159,24 +160,34 @@ set(IR_SRCS
 	ir/Instructions/ArgInstruction.h
 	ir/Instructions/BinaryInstruction.cpp
 	ir/Instructions/BinaryInstruction.h
+	ir/Instructions/BranchInstruction.cpp
+	ir/Instructions/BranchInstruction.h
 	ir/Instructions/EntryInstruction.cpp
 	ir/Instructions/EntryInstruction.h
 	ir/Instructions/ExitInstruction.cpp
 	ir/Instructions/ExitInstruction.h
 	ir/Instructions/FuncCallInstruction.cpp
 	ir/Instructions/FuncCallInstruction.h
+	ir/Instructions/GetElementPtrInstruction.cpp
+	ir/Instructions/GetElementPtrInstruction.h
 	ir/Instructions/GotoInstruction.cpp
 	ir/Instructions/GotoInstruction.h
 	ir/Instructions/LabelInstruction.cpp
 	ir/Instructions/LabelInstruction.h
 	ir/Instructions/MoveInstruction.cpp
 	ir/Instructions/MoveInstruction.h
+	ir/Instructions/NegInstruction.cpp
+	ir/Instructions/NegInstruction.h
 	ir/Types/VoidType.h
 	ir/Types/VoidType.cpp
 	ir/Types/LabelType.h
 	ir/Types/LabelType.cpp
 	ir/Types/IntegerType.h
 	ir/Types/IntegerType.cpp
+	ir/Types/ArrayType.h
+	ir/Types/ArrayType.cpp
+	ir/Types/ArrayParameterType.h
+	ir/Types/ArrayParameterType.cpp
 	ir/Values/ConstInt.h
 	ir/Values/FormalParam.h
 	ir/Values/GlobalVariable.h
@@ -305,31 +316,41 @@ target_link_libraries(${PROJECT_NAME} PRIVATE ${ANTLR4_LIBRARY})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
 
-# 通过flex产生词法分析源代码
-add_custom_target(FLEX_GEN
-	COMMAND
-	${FLEX_EXECUTABLE} ${FLEX_OPTION} -o ${FLEX_GEN_DIR}/MiniCFlex.cpp --header-file=${FLEX_GEN_DIR}/MiniCFlex.h ${FLEX_INPUT}
-	DEPENDS
-	${FLEX_INPUT}
-	WORKING_DIRECTORY
-	${FLEX_GEN_DIR}
-)
-
 # 通过bison生成语法分析源代码
-add_custom_target(BISON_GEN
+add_custom_command(OUTPUT ${BISON_OUTPUT}
+	COMMAND
+	${CMAKE_COMMAND} -E make_directory ${BISON_GEN_DIR}
 	COMMAND
 	${BISON_EXECUTABLE} -d --debug ${BISON_EXTRA_OPTION} -o ${BISON_GEN_DIR}/MiniCBison.cpp --defines=${BISON_GEN_DIR}/MiniCBison.h ${BISON_INPUT}
 	DEPENDS
 	${BISON_INPUT}
 	WORKING_DIRECTORY
 	${BISON_GEN_DIR}
+	COMMENT
+	"bison generate"
+	VERBATIM
+	COMMAND_EXPAND_LISTS
 )
 
-add_dependencies(${PROJECT_NAME} BISON_GEN FLEX_GEN)
+# 通过flex产生词法分析源代码
+add_custom_command(OUTPUT ${FLEX_OUTPUT}
+	COMMAND
+	${CMAKE_COMMAND} -E make_directory ${FLEX_GEN_DIR}
+	COMMAND
+	${FLEX_EXECUTABLE} ${FLEX_OPTION} -o ${FLEX_GEN_DIR}/MiniCFlex.cpp --header-file=${FLEX_GEN_DIR}/MiniCFlex.h ${FLEX_INPUT}
+	DEPENDS
+	${FLEX_INPUT}
+	WORKING_DIRECTORY
+	${FLEX_GEN_DIR}
+	COMMENT
+	"flex generate"
+	VERBATIM
+	COMMAND_EXPAND_LISTS
+)
 
 if(BISON_OUTPUT_GRAPH)
 	# 转换dot文件成png文件
-	add_custom_target(BISON_DOT
+	add_custom_target(BISON_DOT2PNG
 		COMMAND
 		dot -Tpng -o ${BISON_GEN_DIR}/MiniCBison.png ${BISON_GEN_DIR}/MiniCBison.dot
 		DEPENDS ${BISON_GEN_DIR}/MiniCBison.dot
@@ -337,30 +358,47 @@ if(BISON_OUTPUT_GRAPH)
 		"dot2png"
 		VERBATIM
 	)
-	add_dependencies(BISON_DOT BISON_GEN)
-	add_dependencies(${PROJECT_NAME} BISON_DOT)
+	add_dependencies(${PROJECT_NAME} BISON_DOT2PNG)
 endif()
 
 # 通过antlr4.12.0生成词法与语法分析源代码
 # WORKING_DIRECTORY指定工作目录时Mac平台有问题，因此使用绝对地址
-add_custom_command(
-	OUTPUT
-	${ANTLR4_OUTPUT}
+add_custom_command(OUTPUT ${ANTLR4_OUTPUT}
+	COMMAND_EXPAND_LISTS
 	COMMAND
 	${Java_JAVA_EXECUTABLE} -jar ${ANTLR4_JAR_LOCATION} -Dlanguage=Cpp -no-listener -visitor -o ${ANTLR4_GEN_DIR} MiniC.g4
 	DEPENDS
 	${ANTLR4_INPUT}
 	WORKING_DIRECTORY
 	${ANTLR4_GEN_DIR}/..
+	COMMENT
+	"antlr4 generate"
+	VERBATIM
+	COMMAND_EXPAND_LISTS
+)
+
+add_custom_command(TARGET ${PROJECT_NAME}
+	POST_BUILD
+	COMMAND
+	${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json ${CMAKE_CURRENT_SOURCE_DIR}/build/
+	COMMAND
+	${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:${PROJECT_NAME}> ${CMAKE_CURRENT_SOURCE_DIR}/build/
+	COMMENT
+	"compile_commands.json copy to build"
+	VERBATIM
+	COMMAND_EXPAND_LISTS
 )
 
 # 源代码打包
-set(CPACK_SOURCE_GENERATOR "TGZ")
+set(CPACK_SOURCE_GENERATOR "ZIP")
 set(CPACK_SOURCE_PACKAGE_FILE_NAME "${PROJECT_NAME}-${PROJECT_VERSION}-src")
 
 # 忽略不需要源代码目录或文件
 set(CPACK_SOURCE_IGNORE_FILES
 	"/build/;" # 忽略 build 目录
+	"/tools/;" # 忽略 tools 目录
+	"/IRCompiler/;" # 忽略 IRCompiler 目录
+	"/cases/;" # 忽略 cases 目录
 	"/cmake-build-.*/;" # cmake-build-开头的目录
 	"/.git/;" # 忽略 Git 仓库
 	"~$;" # 忽略临时文件（如编辑器产生的临时文件）

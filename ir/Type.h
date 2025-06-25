@@ -35,10 +35,11 @@ public:
         TokenTyID, ///< Tokens
 
         // Derived types
-        IntegerTyID,  ///< Arbitrary bit width integers
-        FunctionTyID, ///< Functions
-        PointerTyID,  ///< Pointers
-        ArrayTyID,    ///< Arrays
+        IntegerTyID,       ///< Arbitrary bit width integers
+        FunctionTyID,      ///< Functions
+        PointerTyID,       ///< Pointers
+        ArrayTyID,         ///< Arrays
+        ArrayParameterTyID, ///< Array parameters (for function formal parameters)
     };
 
     ///
@@ -149,6 +150,16 @@ public:
     [[nodiscard]] bool isArrayType() const
     {
         return ID == ArrayTyID;
+    }
+
+    ///
+    /// @brief 是否是数组形参类型
+    /// @return true 是
+    /// @return false 不是
+    ///
+    [[nodiscard]] virtual bool isArrayParameterType() const
+    {
+        return false;
     }
 
     ///

@@ -135,6 +135,18 @@ public:
     /// @return 要保护的寄存器
     std::string & getProtectedRegStr();
 
+    /// @brief 获取函数的栈帧大小
+    /// @return 栈帧大小（字节数）
+    int32_t getStackSize() const {
+        return stackSize;
+    }
+
+    /// @brief 设置函数的栈帧大小
+    /// @param size 栈帧大小（字节数）
+    void setStackSize(int32_t size) {
+        stackSize = size;
+    }
+
     /// @brief 新建局部变量型Value
     /// @param name 变量ID
     /// @param type 变量类型
@@ -250,4 +262,7 @@ private:
     /// @brief 累计的实参个数，用于ARG指令的统计
     ///
     int32_t realArgCount = 0;
+
+    /// @brief 函数的栈帧大小（字节数）
+    int32_t stackSize = 0;
 };

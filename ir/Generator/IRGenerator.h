@@ -92,6 +92,42 @@ protected:
     /// @return 翻译是否成功，true：成功，false：失败
     bool ir_mod(ast_node * node);
 
+    /// @brief 整数大于比较AST节点翻译成线性中间IR
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_gt(ast_node * node);
+
+    /// @brief 整数大于等于比较AST节点翻译成线性中间IR
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_ge(ast_node * node);
+
+    /// @brief 整数小于比较AST节点翻译成线性中间IR
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_lt(ast_node * node);
+
+    /// @brief 整数小于等于比较AST节点翻译成线性中间IR
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_le(ast_node * node);
+
+    /// @brief 整数等于比较AST节点翻译成线性中间IR
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_eq(ast_node * node);
+
+    /// @brief 整数不等于比较AST节点翻译成线性中间IR
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_ne(ast_node * node);
+
+    /// @brief 通用关系表达式处理函数
+    /// @param node AST节点
+    /// @param op 关系运算符
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_rel_operation(ast_node * node, IRInstOperator op);
+
     /// @brief 赋值AST节点翻译成线性中间IR
     /// @param node AST节点
     /// @return 翻译是否成功，true：成功，false：失败
@@ -148,7 +184,81 @@ protected:
     /// @brief AST节点运算符与动作函数关联的映射表
     std::unordered_map<ast_operator_type, ast2ir_handler_t> ast2ir_handlers;
 
+    /// @brief 生成唯一的标签名
+    /// @param prefix 标签前缀
+    /// @return 生成的标签名
+    std::string generateUniqueLabel(const std::string& prefix);
+
+    /// @brief 标签计数器，用于生成唯一标签
+    int label_counter = 0;
+
+    /// @brief IF语句处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_if(ast_node * node);
+
+    /// @brief IF-ELSE语句处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_if_else(ast_node * node);
+
+    /// @brief 逻辑与(&&)表达式处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_and(ast_node * node);
+
+    /// @brief 逻辑或(||)表达式处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_or(ast_node * node);
+
+    /// @brief 逻辑非(!)表达式处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_not(ast_node * node);
+
+    /// @brief WHILE循环语句处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_while(ast_node * node);
+
+    /// @brief BREAK语句处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_break(ast_node * node);
+
+    /// @brief CONTINUE语句处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_continue(ast_node * node);
+
+    /// @brief 数组定义处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_array_def(ast_node * node);
+
+    /// @brief 数组维度处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_array_dimensions(ast_node * node);
+
+    /// @brief 数组访问处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_array_access(ast_node * node);
+
+    /// @brief 数组形参处理函数
+    /// @param node AST节点
+    /// @return 翻译是否成功，true：成功，false：失败
+    bool ir_func_formal_param_array(ast_node * node);
+
 private:
+    /// @brief 辅助函数：如果值是指针类型，则创建解引用指令
+    /// @param node AST节点
+    /// @param val 要检查的值
+    /// @return 解引用后的值或原值
+    Value* dereferenceIfPointer(ast_node* node, Value* val);
+
     /// @brief 抽象语法树的根
     ast_node * root;
 

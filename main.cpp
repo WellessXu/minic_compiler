@@ -57,7 +57,7 @@ static bool gShowSymbol = false;
 ///
 /// @brief 前端分析器，默认选Flex和Bison
 ///
-static bool gFrontEndFlexBison = true;
+static bool gFrontEndFlexBison = false;
 
 ///
 /// @brief 前端分析器Antlr4，是否选中
@@ -317,7 +317,7 @@ static int compile(std::string inputFile, std::string outputFile)
         // 都需要遍历AST转换成线性IR指令
 
         // 符号表，保存所有的变量以及函数等信息
-        Module * module = new Module(inputFile);
+        module = new Module(inputFile);
 
         // 遍历抽象语法树产生线性IR，相关信息保存到符号表中
         IRGenerator ast2IR(astRoot, module);

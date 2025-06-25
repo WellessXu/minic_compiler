@@ -1,0 +1,2446 @@
+﻿///
+/// @file IRGenerator.cpp
+/// @brief AST遍历产生线性IR的源文件
+/// @author zenglj (zenglj@live.com)
+/// @version 1.1
+/// @date 2024-11-23
+///
+/// @copyright Copyright (c) 2024
+///
+/// @par 修改日志:
+/// <table>
+/// <tr><th>Date       <th>Version <th>Author  <th>Description
+/// <tr><td>2024-09-29 <td>1.0     <td>zenglj  <td>新建
+/// <tr><td>2024-11-23 <td>1.1     <td>zenglj  <td>表达式版增强
+/// </table>
+///
+#include <cstdint>
+#include <cstdio>
+#include <unordered_map>
+#include <vector>
+#include <iostream>
+
+#include "AST.h"
+#include "Common.h"
+#include "Function.h"
+#include "IRCode.h"
+#include "IRGenerator.h"
+#include "Module.h"
+#include "EntryInstruction.h"
+#include "LabelInstruction.h"
+#include "ExitInstruction.h"
+#include "FuncCallInstruction.h"
+#include "BinaryInstruction.h"
+#include "MoveInstruction.h"
+#include "GotoInstruction.h"
+#include "IntegerType.h"
+#include "ArgInstruction.h"
+#include "ConstInt.h"
+#include "BranchInstruction.h"
+#include "LocalVariable.h"
+#include "FormalParam.h"
+#include "NegInstruction.h"
+#include "ArrayType.h"
+#include "MemVariable.h"
+#include "PointerType.h"
+#include "GlobalVariable.h"
+#include "ArrayParameterType.h"
+#include "InstSelectorArm32.h"
+#include "User.h"
+
+
+// Static helper function to generate a conditional branch based on a Value.
+// If the value is not already a boolean (i1), it compares it to zero.
+static void generateBranchOnValue(ast_node* node, Module* module, Value* value, const std::string& true_label, const std::string& false_label) {
+    if (!value) {
+        minic_log(LOG_ERROR, "Cannot generate branch on a null value.");
+        return;
+    }
+    // If the value is already a boolean result from a comparison, use it directly.
+    if (value->getType()->isInt1Byte()) {
+        node->blockInsts.addInst(new BranchInstruction(module->getCurrentFunction(), value, true_label, false_label));
+    } else { 
+        // Otherwise, it's a value that needs to be compared to zero.
+        BinaryInstruction* cmpInst = new BinaryInstruction(
+            module->getCurrentFunction(),
+            IRInstOperator::IRINST_OP_NE_I, // value != 0
+            value,
+            module->newConstInt(0),
+            IntegerType::getTypeBool()
+        );
+        node->blockInsts.addInst(cmpInst);
+        node->blockInsts.addInst(new BranchInstruction(module->getCurrentFunction(), cmpInst, true_label, false_label));
+    }
+}
+
+
+// Static helper function definition (NEW POSITION, AT TOP)
+static bool find_enclosing_loop_labels(ast_node* current_node, std::string& loop_s_label, std::string& loop_e_label) {
+    ast_node* walker = current_node; 
+    while (walker) {
+        if (walker->node_type == ast_operator_type::AST_OP_WHILE) {
+            if (!walker->loop_start_label.empty() && !walker->loop_end_label.empty()) {
+                loop_s_label = walker->loop_start_label;
+                loop_e_label = walker->loop_end_label;
+                return true;
+            }
+        }
+        if (!walker->loop_start_label.empty() && !walker->loop_end_label.empty()) {
+             bool isLikelyLoopBodyBlock = false;
+             if(walker->parent && walker->parent->node_type == ast_operator_type::AST_OP_WHILE && 
+                walker->parent->sons.size() > 1 && walker->parent->sons[1] == walker){
+                 isLikelyLoopBodyBlock = true; 
+             }
+             if(isLikelyLoopBodyBlock){
+                loop_s_label = walker->loop_start_label;
+                loop_e_label = walker->loop_end_label;
+                return true;
+             }
+        }
+        walker = walker->parent;
+    }
+    return false; 
+}
+
+/// @brief 构造函数
+/// @param _root AST的根
+/// @param _module 符号表
+IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), module(_module)
+{
+    /* 叶子节点 */
+    ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_UINT] = &IRGenerator::ir_leaf_node_uint;
+    ast2ir_handlers[ast_operator_type::AST_OP_LEAF_VAR_ID] = &IRGenerator::ir_leaf_node_var_id;
+    ast2ir_handlers[ast_operator_type::AST_OP_LEAF_TYPE] = &IRGenerator::ir_leaf_node_type;
+
+    /* 表达式运算， 加减 */
+    ast2ir_handlers[ast_operator_type::AST_OP_SUB] = &IRGenerator::ir_sub;
+    ast2ir_handlers[ast_operator_type::AST_OP_ADD] = &IRGenerator::ir_add;
+    ast2ir_handlers[ast_operator_type::AST_OP_NEG] = &IRGenerator::ir_neg;
+    ast2ir_handlers[ast_operator_type::AST_OP_MUL] = &IRGenerator::ir_mul;
+    ast2ir_handlers[ast_operator_type::AST_OP_DIV] = &IRGenerator::ir_div;
+    ast2ir_handlers[ast_operator_type::AST_OP_MOD] = &IRGenerator::ir_mod;
+
+    /* 关系运算符 */
+    ast2ir_handlers[ast_operator_type::AST_OP_GT] = &IRGenerator::ir_gt;
+    ast2ir_handlers[ast_operator_type::AST_OP_GE] = &IRGenerator::ir_ge;
+    ast2ir_handlers[ast_operator_type::AST_OP_LT] = &IRGenerator::ir_lt;
+    ast2ir_handlers[ast_operator_type::AST_OP_LE] = &IRGenerator::ir_le;
+    ast2ir_handlers[ast_operator_type::AST_OP_EQ] = &IRGenerator::ir_eq;
+    ast2ir_handlers[ast_operator_type::AST_OP_NE] = &IRGenerator::ir_ne;
+
+    /* 逻辑运算符 */
+    ast2ir_handlers[ast_operator_type::AST_OP_AND] = &IRGenerator::ir_and;
+    ast2ir_handlers[ast_operator_type::AST_OP_OR] = &IRGenerator::ir_or;
+    ast2ir_handlers[ast_operator_type::AST_OP_NOT] = &IRGenerator::ir_not;
+
+    /* 语句 */
+    ast2ir_handlers[ast_operator_type::AST_OP_ASSIGN] = &IRGenerator::ir_assign;
+    ast2ir_handlers[ast_operator_type::AST_OP_RETURN] = &IRGenerator::ir_return;
+
+    /* 函数调用 */
+    ast2ir_handlers[ast_operator_type::AST_OP_FUNC_CALL] = &IRGenerator::ir_function_call;
+
+    /* 函数定义 */
+    ast2ir_handlers[ast_operator_type::AST_OP_FUNC_DEF] = &IRGenerator::ir_function_define;
+    ast2ir_handlers[ast_operator_type::AST_OP_FUNC_FORMAL_PARAMS] = &IRGenerator::ir_function_formal_params;
+
+    /* 变量定义语句 */
+    ast2ir_handlers[ast_operator_type::AST_OP_DECL_STMT] = &IRGenerator::ir_declare_statment;
+    ast2ir_handlers[ast_operator_type::AST_OP_VAR_DECL] = &IRGenerator::ir_variable_declare;
+
+    /* 语句块 */
+    ast2ir_handlers[ast_operator_type::AST_OP_BLOCK] = &IRGenerator::ir_block;
+
+    /* 编译单元 */
+    ast2ir_handlers[ast_operator_type::AST_OP_COMPILE_UNIT] = &IRGenerator::ir_compile_unit;
+
+    /* IF语句 */
+    ast2ir_handlers[ast_operator_type::AST_OP_IF] = &IRGenerator::ir_if;
+    ast2ir_handlers[ast_operator_type::AST_OP_IF_ELSE] = &IRGenerator::ir_if_else;
+    
+    /* 循环和跳转语句 */
+    ast2ir_handlers[ast_operator_type::AST_OP_WHILE] = &IRGenerator::ir_while;
+    ast2ir_handlers[ast_operator_type::AST_OP_BREAK] = &IRGenerator::ir_break;
+    ast2ir_handlers[ast_operator_type::AST_OP_CONTINUE] = &IRGenerator::ir_continue;
+
+    /* 数组相关 */
+    ast2ir_handlers[ast_operator_type::AST_OP_ARRAY_DEF] = &IRGenerator::ir_array_def;
+    ast2ir_handlers[ast_operator_type::AST_OP_ARRAY_DIMENSIONS] = &IRGenerator::ir_array_dimensions;
+    ast2ir_handlers[ast_operator_type::AST_OP_ARRAY_ACCESS] = &IRGenerator::ir_array_access;
+    ast2ir_handlers[ast_operator_type::AST_OP_FUNC_FORMAL_PARAM_ARRAY] = &IRGenerator::ir_func_formal_param_array;
+}
+
+/// @brief 遍历抽象语法树产生线性IR，保存到IRCode中
+/// @param root 抽象语法树
+/// @param IRCode 线性IR
+/// @return true: 成功 false: 失败
+bool IRGenerator::run()
+{
+    ast_node * node;
+
+    // 从根节点进行遍历
+    node = ir_visit_ast_node(root);
+
+    return node != nullptr;
+}
+
+/// @brief 根据AST的节点运算符查找对应的翻译函数并执行翻译动作
+/// @param node AST节点
+/// @return 成功返回node节点，否则返回nullptr
+ast_node * IRGenerator::ir_visit_ast_node(ast_node * node)
+{
+    // 空节点
+    if (nullptr == node) {
+        minic_log(LOG_ERROR, "传入的AST节点为空");
+        return nullptr;
+    }
+
+    bool result;
+
+    std::unordered_map<ast_operator_type, ast2ir_handler_t>::const_iterator pIter;
+    pIter = ast2ir_handlers.find(node->node_type);
+    if (pIter == ast2ir_handlers.end()) {
+        // 没有找到，则说明当前不支持该节点类型
+        minic_log(LOG_INFO, "未找到处理AST节点类型(%d)的处理函数", (int)node->node_type);
+        result = (this->ir_default)(node);
+    } else {
+        try {
+            result = (this->*(pIter->second))(node);
+        } catch (const std::exception& e) {
+            minic_log(LOG_ERROR, "处理AST节点时发生异常: %s", e.what());
+            result = false;
+        } catch (...) {
+            minic_log(LOG_ERROR, "处理AST节点时发生未知异常");
+            result = false;
+        }
+    }
+
+    if (!result) {
+        // 语义解析错误，则出错返回
+        minic_log(LOG_ERROR, "AST节点(%d)处理失败", (int)node->node_type);
+        node = nullptr;
+    }
+
+    // 成功处理后检查是否设置了必要的属性
+    if (node && node->val == nullptr) {
+        // 这里不应该发出警告，因为某些节点(如语句块)不需要设置val
+        if (node->node_type == ast_operator_type::AST_OP_GT ||
+            node->node_type == ast_operator_type::AST_OP_GE ||
+            node->node_type == ast_operator_type::AST_OP_LT ||
+            node->node_type == ast_operator_type::AST_OP_LE ||
+            node->node_type == ast_operator_type::AST_OP_EQ ||
+            node->node_type == ast_operator_type::AST_OP_NE) {
+            minic_log(LOG_INFO, "关系运算节点(%d)未设置val属性", (int)node->node_type);
+        }
+    }
+
+    return node;
+}
+
+/// @brief 未知节点类型的节点处理
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_default(ast_node * node)
+{
+    // 未知的节点
+    printf("Unkown node(%d)\n", (int) node->node_type);
+    return true;
+}
+
+/// @brief 编译单元AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_compile_unit(ast_node * node)
+{
+    module->setCurrentFunction(nullptr);
+
+    for (auto son: node->sons) {
+
+        // 遍历编译单元，要么是函数定义，要么是语句
+        ast_node * son_node = ir_visit_ast_node(son);
+        if (!son_node) {
+            // TODO 自行追加语义错误处理
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/// @brief 函数定义AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_function_define(ast_node * node)
+{
+    // Reset label counter at the beginning of a new function definition
+    this->label_counter = 0;
+
+    bool result;
+
+    // 创建一个函数，用于当前函数处理
+    if (module->getCurrentFunction()) {
+        // 函数中嵌套定义函数，这是不允许的，错误退出
+        // TODO 自行追加语义错误处理
+        return false;
+    }
+
+    // 函数定义的AST包含四个孩子
+    // 第一个孩子：函数返回类型
+    // 第二个孩子：函数名字
+    // 第三个孩子：形参列表
+    // 第四个孩子：函数体即block
+    ast_node * type_node = node->sons[0];
+    ast_node * name_node = node->sons[1];
+    ast_node * param_node = node->sons[2];
+    ast_node * block_node = node->sons[3];
+
+    // 创建一个新的函数定义
+    Function * newFunc = module->newFunction(name_node->name, type_node->type);
+    if (!newFunc) {
+        // 新定义的函数已经存在，则失败返回。
+        // TODO 自行追加语义错误处理
+        return false;
+    }
+
+    // 当前函数设置有效，变更为当前的函数
+    module->setCurrentFunction(newFunc);
+
+    // 进入函数的作用域
+    module->enterScope();
+
+    // 获取函数的IR代码列表，用于后面追加指令用，注意这里用的是引用传值
+    InterCode & irCode = newFunc->getInterCode();
+
+    // 这里也可增加一个函数入口Label指令，便于后续基本块划分
+
+    // 创建并加入Entry入口指令
+    irCode.addInst(new EntryInstruction(newFunc));
+
+    // 创建出口指令并不加入出口指令，等函数内的指令处理完毕后加入出口指令
+    LabelInstruction * exitLabelInst = new LabelInstruction(newFunc);
+
+    // 函数出口指令保存到函数信息中，因为在语义分析函数体时return语句需要跳转到函数尾部，需要这个label指令
+    newFunc->setExitLabel(exitLabelInst);
+
+    // 遍历形参，没有IR指令，不需要追加
+    result = ir_function_formal_params(param_node);
+    if (!result) {
+        // 形参解析失败
+        // TODO 自行追加语义错误处理
+        return false;
+    }
+    
+    // 将实参传递给形参变量（由调用方传递的参数赋值给局部变量）
+    const auto& params = newFunc->getParams();
+    for (size_t i = 0; i < params.size(); i++) {
+        FormalParam* formalParam = params[i];
+        // 查找对应的局部变量
+        Value* localVar = module->findVarValue(formalParam->getName());
+        if (localVar) {
+            // 创建形参赋值指令：将形参赋值给局部变量
+            MoveInstruction* moveInst = new MoveInstruction(newFunc, localVar, formalParam);
+            param_node->blockInsts.addInst(moveInst);
+        }
+    }
+    
+    // 添加形参处理的指令到函数体
+    node->blockInsts.addInst(param_node->blockInsts);
+
+    // 新建一个Value，用于保存函数的返回值，如果没有返回值可不用申请
+    LocalVariable * retValue = nullptr;
+    if (!type_node->type->isVoidType()) { // Check if the return type is not void
+        // 保存函数返回值变量到函数信息中，在return语句翻译时需要设置值到这个变量中
+        retValue = static_cast<LocalVariable *>(module->newVarValue(type_node->type));
+    }
+    newFunc->setReturnValue(retValue);
+
+    // 函数内已经进入作用域，内部不再需要做变量的作用域管理
+    block_node->needScope = false;
+
+    // 遍历block
+    result = ir_block(block_node);
+    if (!result) {
+        // block解析失败
+        // TODO 自行追加语义错误处理
+        return false;
+    }
+
+    // IR指令追加到当前的节点中
+    node->blockInsts.addInst(block_node->blockInsts);
+
+    // 此时，所有指令都加入到当前函数中，也就是node->blockInsts
+
+    // node节点的指令移动到函数的IR指令列表中
+    irCode.addInst(node->blockInsts);
+
+    // 添加函数出口Label指令，主要用于return语句跳转到这里进行函数的退出
+    irCode.addInst(exitLabelInst);
+
+    // 函数出口指令
+    irCode.addInst(new ExitInstruction(newFunc, retValue));
+
+    // 恢复成外部函数
+    module->setCurrentFunction(nullptr);
+
+    // 退出函数的作用域
+    module->leaveScope();
+
+    return true;
+}
+
+/// @brief 形式参数AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_function_formal_params(ast_node * node)
+{
+    // 处理函数形参列表
+    if (!node || node->sons.empty()) {
+        return true;  // 没有形参，处理成功
+    }
+
+    Function* currentFunc = module->getCurrentFunction();
+    if (!currentFunc) {
+        minic_log(LOG_ERROR, "处理形参时无法获取当前函数");
+        return false;
+    }
+
+    // 遍历形参列表
+    for (auto paramNode : node->sons) {
+        if (paramNode->node_type != ast_operator_type::AST_OP_FUNC_FORMAL_PARAM &&
+            paramNode->node_type != ast_operator_type::AST_OP_FUNC_FORMAL_PARAM_ARRAY) {
+            minic_log(LOG_ERROR, "形参节点类型错误");
+            return false;
+        }
+
+        // 处理不同类型的形参
+        if (paramNode->node_type == ast_operator_type::AST_OP_FUNC_FORMAL_PARAM) {
+            // 普通形参处理
+        // 获取名称节点
+        ast_node* nameNode = paramNode->sons[1];
+        
+        // 创建形参
+        std::string paramName = nameNode->name;
+        Type* paramType = IntegerType::getTypeInt(); // 目前仅支持整型参数
+        
+        // 为形参创建形参变量
+        FormalParam* paramVar = new FormalParam(paramType, paramName);
+        if (!paramVar) {
+            minic_log(LOG_ERROR, "创建形参变量失败: %s", paramName.c_str());
+            return false;
+        }
+        
+        // 向函数的形参列表中添加形参
+        currentFunc->getParams().push_back(paramVar);
+        
+        // 在当前作用域中创建局部变量作为形参
+        Value* localVar = module->newVarValue(paramType, paramName);
+        if (!localVar) {
+            minic_log(LOG_ERROR, "创建形参对应的局部变量失败: %s", paramName.c_str());
+            return false;
+        }
+        
+        // 确认变量确实添加到了作用域中
+        Value* testVar = module->findVarValue(paramName);
+        if (!testVar) {
+            minic_log(LOG_ERROR, "形参未成功添加到作用域: %s", paramName.c_str());
+            return false;
+            }
+        } else {
+            // 数组形参处理
+            if (!ir_func_formal_param_array(paramNode)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+/// @brief 函数调用AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_function_call(ast_node * node)
+{
+    std::vector<Value *> realParams;
+
+    // 获取当前正在处理的函数
+    Function * currentFunc = module->getCurrentFunction();
+
+    // 函数调用的节点包含两个节点：
+    // 第一个节点：函数名节点
+    // 第二个节点：实参列表节点
+
+    std::string funcName = node->sons[0]->name;
+    int64_t lineno = node->sons[0]->line_no;
+
+    ast_node * paramsNode = node->sons[1];
+
+    // 根据函数名查找函数，看是否存在。若不存在则出错
+    // 这里约定函数必须先定义后使用
+    auto calledFunction = module->findFunction(funcName);
+    if (nullptr == calledFunction) {
+        minic_log(LOG_ERROR, "函数(%s)未定义或声明", funcName.c_str());
+        return false;
+    }
+
+    // 当前函数存在函数调用
+    currentFunc->setExistFuncCall(true);
+
+    // 检查被调用函数的参数声明
+    int32_t declaredParamCount = calledFunction->getParams().size();
+    
+    // 如果没有孩子，也认为是没有参数
+    if (!paramsNode->sons.empty() && declaredParamCount > 0) {
+        int32_t argsCount = (int32_t) paramsNode->sons.size();
+
+        // 当前函数中调用函数实参个数最大值统计，实际上是统计实参传参需在栈中分配的大小
+        // 因为目前的语言支持的int和float都是四字节的，只统计个数即可
+        if (argsCount > currentFunc->getMaxFuncCallArgCnt()) {
+            currentFunc->setMaxFuncCallArgCnt(argsCount);
+        }
+
+        // 遍历参数列表，孩子是表达式
+        // 这里自左往右计算表达式
+        for (auto son: paramsNode->sons) {
+            // 遍历Block的每个语句，进行显示或者运算
+            ast_node * temp = ir_visit_ast_node(son);
+            if (!temp) {
+                return false;
+            }
+
+            realParams.push_back(temp->val);
+            node->blockInsts.addInst(temp->blockInsts);
+        }
+    }
+
+    // 检查参数个数是否匹配
+    if (realParams.size() != declaredParamCount) {
+        // 函数参数的个数不一致，语义错误
+        minic_log(LOG_ERROR, "第%lld行的被调用函数(%s)参数个数不匹配，期望%d个，实际%zu个", 
+                 (long long)lineno, funcName.c_str(), declaredParamCount, realParams.size());
+        return false;
+    }
+
+    // 返回调用有返回值，则需要分配临时变量，用于保存函数调用的返回值
+    Type * type = calledFunction->getReturnType();
+
+    FuncCallInstruction * funcCallInst = new FuncCallInstruction(currentFunc, calledFunction, realParams, type);
+
+    // 创建函数调用指令
+    node->blockInsts.addInst(funcCallInst);
+
+    // 函数调用结果Value保存到node中，可能为空，上层节点可利用这个值
+    node->val = funcCallInst;
+
+    return true;
+}
+
+/// @brief 语句块（含函数体）AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_block(ast_node * node)
+{
+    // 进入作用域
+    if (node->needScope) {
+        module->enterScope();
+    }
+
+    std::vector<ast_node *>::iterator pIter;
+    for (pIter = node->sons.begin(); pIter != node->sons.end(); ++pIter) {
+
+        // 遍历Block的每个语句，进行显示或者运算
+        ast_node * temp = ir_visit_ast_node(*pIter);
+        if (!temp) {
+            return false;
+        }
+
+        node->blockInsts.addInst(temp->blockInsts);
+    }
+
+    // 离开作用域
+    if (node->needScope) {
+        module->leaveScope();
+    }
+
+    return true;
+}
+
+/// @brief 辅助函数：如果值是指针类型，则创建解引用指令
+/// @param node AST节点
+/// @param val 要检查的值
+/// @return 解引用后的值或原值
+Value* IRGenerator::dereferenceIfPointer(ast_node* node, Value* val)
+{
+    if (!val || !val->getType()->isPointerType()) {
+        return val;
+    }
+    
+    // 获取指针指向的类型
+    PointerType* ptrType = dynamic_cast<PointerType*>(val->getType());
+    Type* elementType = const_cast<Type*>(ptrType->getPointeeType());
+    
+    // 创建临时变量来保存解引用的值
+    Value* tempVar = module->newVarValue(elementType);
+    
+    // 创建指针解引用指令：tempVar = *pointer
+    MoveInstruction* loadInst = new MoveInstruction(module->getCurrentFunction(), tempVar, val);
+    node->blockInsts.addInst(loadInst);
+    
+    return tempVar;
+}
+
+/// @brief 整数加法AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_add(ast_node * node)
+{
+    ast_node * src1_node = node->sons[0];
+    ast_node * src2_node = node->sons[1];
+
+    // 加法节点，左结合，先计算左节点，后计算右节点
+
+    // 加法的左边操作数
+    ast_node * left = ir_visit_ast_node(src1_node);
+    if (!left) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 加法的右边操作数
+    ast_node * right = ir_visit_ast_node(src2_node);
+    if (!right) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* leftVal = dereferenceIfPointer(node, left->val);
+    Value* rightVal = dereferenceIfPointer(node, right->val);
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+
+    BinaryInstruction * addInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                        IRInstOperator::IRINST_OP_ADD_I,
+                                                        leftVal,
+                                                        rightVal,
+                                                        IntegerType::getTypeInt());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(addInst);
+
+    node->val = addInst;
+
+    return true;
+}
+
+/// @brief 整数减法AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_sub(ast_node * node)
+{
+    ast_node * src1_node = node->sons[0];
+    ast_node * src2_node = node->sons[1];
+
+    // 加法节点，左结合，先计算左节点，后计算右节点
+
+    // 加法的左边操作数
+    ast_node * left = ir_visit_ast_node(src1_node);
+    if (!left) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 加法的右边操作数
+    ast_node * right = ir_visit_ast_node(src2_node);
+    if (!right) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* leftVal = dereferenceIfPointer(node, left->val);
+    Value* rightVal = dereferenceIfPointer(node, right->val);
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+
+    BinaryInstruction * subInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                        IRInstOperator::IRINST_OP_SUB_I,
+                                                        leftVal,
+                                                        rightVal,
+                                                        IntegerType::getTypeInt());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(subInst);
+
+    node->val = subInst;
+
+    return true;
+}
+
+/// @brief 整数求负AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_neg(ast_node * node)
+{
+    // 获取操作数
+    ast_node * operand_node = node->sons[0];
+
+    // 先计算操作数
+    ast_node * operand = ir_visit_ast_node(operand_node);
+    if (!operand) {
+        // 操作数计算失败
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* operandVal = dereferenceIfPointer(node, operand->val);
+
+    // 创建NEG指令
+    NegInstruction * negInst = new NegInstruction(module->getCurrentFunction(),
+                                                  operandVal,
+                                                        IntegerType::getTypeInt());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(operand->blockInsts);
+    node->blockInsts.addInst(negInst);
+
+    node->val = negInst;
+
+    return true;
+}
+
+/// @brief 赋值AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_assign(ast_node * node)
+{
+    ast_node * son1_node = node->sons[0];
+    ast_node * son2_node = node->sons[1];
+
+    // 赋值节点，自右往左运算
+
+    // 赋值运算符的左侧操作数
+    ast_node * left = ir_visit_ast_node(son1_node);
+    if (!left) {
+        // 某个变量没有定值
+        // 这里缺省设置变量不存在则创建，因此这里不会错误
+        return false;
+    }
+
+    // 赋值运算符的右侧操作数
+    ast_node * right = ir_visit_ast_node(son2_node);
+    if (!right) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+
+    // 检查左值是否为数组访问
+    if (son1_node->node_type == ast_operator_type::AST_OP_ARRAY_ACCESS) {
+        // 数组元素赋值，使用内存存储指令
+        // left->val 是数组元素的地址，right->val 是要赋的值
+        
+        // 创建内存存储指令 *address = value
+        // 这里我们需要创建一个特殊的赋值指令来处理内存存储
+        MoveInstruction * storeInst = new MoveInstruction(module->getCurrentFunction(), left->val, right->val);
+        
+        // 创建临时变量保存IR的值，以及线性IR指令
+        node->blockInsts.addInst(right->blockInsts);
+        node->blockInsts.addInst(left->blockInsts);
+        node->blockInsts.addInst(storeInst);
+        
+        // 这里假定赋值的类型是一致的
+        node->val = storeInst;
+    } else {
+        // 普通变量赋值
+    MoveInstruction * movInst = new MoveInstruction(module->getCurrentFunction(), left->val, right->val);
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(movInst);
+
+    // 这里假定赋值的类型是一致的
+    node->val = movInst;
+    }
+
+    return true;
+}
+
+/// @brief return节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_return(ast_node * node)
+{
+    ast_node * right = nullptr;
+
+    // return语句可能没有没有表达式，也可能有，因此这里必须进行区分判断
+    if (!node->sons.empty()) {
+
+        ast_node * son_node = node->sons[0];
+
+        // 返回的表达式的指令保存在right节点中
+        right = ir_visit_ast_node(son_node);
+        if (!right) {
+
+            // 某个变量没有定值
+            return false;
+        }
+    }
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+    Function * currentFunc = module->getCurrentFunction();
+
+    // 返回值存在时则移动指令到node中
+    if (right) {
+
+        // 创建临时变量保存IR的值，以及线性IR指令
+        node->blockInsts.addInst(right->blockInsts);
+
+        // 返回值赋值到函数返回值变量上，然后跳转到函数的尾部
+        node->blockInsts.addInst(new MoveInstruction(currentFunc, currentFunc->getReturnValue(), right->val));
+
+        node->val = right->val;
+    } else {
+        // 没有返回值
+        node->val = nullptr;
+    }
+
+    // 跳转到函数的尾部出口指令上
+    node->blockInsts.addInst(new GotoInstruction(currentFunc, currentFunc->getExitLabel()));
+
+    return true;
+}
+
+/// @brief 类型叶子节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_leaf_node_type(ast_node * node)
+{
+    // 不需要做什么，直接从节点中获取即可。
+
+    return true;
+}
+
+/// @brief 标识符叶子节点翻译成线性中间IR，变量声明的不走这个语句
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_leaf_node_var_id(ast_node * node)
+{
+    // 安全检查
+    if (!node || node->name.empty()) {
+        minic_log(LOG_ERROR, "变量标识符节点无效或名称为空");
+        return false;
+    }
+
+    // 查找ID型Value
+    Value * val = module->findVarValue(node->name);
+    
+    // 检查变量是否存在
+    if (!val) {
+        minic_log(LOG_ERROR, "变量 '%s' 未定义", node->name.c_str());
+        return false;
+    }
+
+    node->val = val;
+    return true;
+}
+
+/// @brief 无符号整数字面量叶子节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_leaf_node_uint(ast_node * node)
+{
+    ConstInt * val;
+
+    // 新建一个整数常量Value
+    val = module->newConstInt((int32_t) node->integer_val);
+
+    node->val = val;
+
+    return true;
+}
+
+/// @brief 变量声明语句节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_declare_statment(ast_node * node)
+{
+    // bool result = false; // Original line, seems not quite right for accumulation
+
+    for (auto & child: node->sons) { // child is AST_OP_VAR_DECL
+        ast_node* visited_var_decl_node = ir_visit_ast_node(child);
+        if (!visited_var_decl_node) {
+            minic_log(LOG_ERROR, "Failed to process a variable declaration within a statement.");
+            return false; // Error during processing of one of the var_decl nodes
+        }
+        // Accumulate instructions from this var_decl (which now includes potential store)
+        // into the DECL_STMT node's instructions.
+        node->blockInsts.addInst(visited_var_decl_node->blockInsts);
+    }
+
+    return true; // If all declarations were processed successfully
+}
+
+/// @brief 变量定声明节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_variable_declare(ast_node * node) // node is AST_OP_VAR_DECL
+{
+    if (node->sons.empty()) {
+        minic_log(LOG_ERROR, "AST_OP_VAR_DECL node has no children.");
+        return false;
+    }
+    ast_node * type_node_ast = node->sons[0];
+    if (node->sons.size() < 2) {
+        minic_log(LOG_ERROR, "AST_OP_VAR_DECL node has less than 2 children (type and id/array_def).");
+        return false;
+    }
+    ast_node * id_or_array_node = node->sons[1];
+
+    Type* var_type = nullptr;
+    std::string var_name;
+    Value* var_mem_location = nullptr; 
+
+    // Determine variable type and name
+    if (id_or_array_node->node_type == ast_operator_type::AST_OP_ARRAY_DEF) {
+        if (!ir_visit_ast_node(id_or_array_node)) { 
+            minic_log(LOG_ERROR, "Failed to process array definition for IR generation.");
+            return false;
+        }
+        var_type = id_or_array_node->type;
+        if (!var_type) {
+             minic_log(LOG_ERROR, "Array definition node did not set a type.");
+             return false;
+        }
+        if (id_or_array_node->sons.empty() || id_or_array_node->sons[0]->node_type != ast_operator_type::AST_OP_LEAF_VAR_ID) {
+            minic_log(LOG_ERROR, "Array definition node missing variable name.");
+            return false;
+        }
+        var_name = id_or_array_node->sons[0]->name;
+    } else if (id_or_array_node->node_type == ast_operator_type::AST_OP_LEAF_VAR_ID) {
+        if (!type_node_ast || !type_node_ast->type) {
+            minic_log(LOG_ERROR, "Type node or type information missing for simple variable declaration.");
+            return false;
+        }
+        var_type = type_node_ast->type;
+        var_name = id_or_array_node->name;
+    } else {
+        minic_log(LOG_ERROR, "Unexpected node type (expected VAR_ID or ARRAY_DEF) as second child of AST_OP_VAR_DECL.");
+        return false;
+    }
+
+    Constant* global_const_initializer = nullptr; // Will hold Constant* if global and has const init
+    ast_node * init_expr_ast_node = nullptr;
+    bool has_initializer = (node->sons.size() > 2 && node->sons[2] != nullptr);
+
+    if (has_initializer) {
+        init_expr_ast_node = node->sons[2];
+        if (!ir_visit_ast_node(init_expr_ast_node)) {
+            minic_log(LOG_ERROR, "Failed to generate IR for initializer of variable '%s'.", var_name.c_str());
+            return false;
+        }
+        if (!init_expr_ast_node->val) {
+            minic_log(LOG_ERROR, "Initializer expression for variable '%s' did not yield a Value.", var_name.c_str());
+            return false;
+        }
+
+        if (module->getCurrentFunction() == nullptr) { // Global variable initializer
+            // 特殊处理常量负数表达式
+            if (init_expr_ast_node->node_type == ast_operator_type::AST_OP_NEG) {
+                // 检查是否是对常量的求负操作
+                ast_node* operand = init_expr_ast_node->sons[0];
+                if (operand->node_type == ast_operator_type::AST_OP_LEAF_LITERAL_UINT) {
+                    // 是常量负数，直接计算结果
+                    int32_t negValue = -(int32_t)operand->integer_val;
+                    global_const_initializer = module->newConstInt(negValue);
+                    
+                    // 清空生成的指令，因为我们直接计算了常量值
+                    init_expr_ast_node->blockInsts.Delete();
+                    init_expr_ast_node->val = global_const_initializer;
+                } else {
+                    minic_log(LOG_ERROR, "Initializer for global variable '%s' contains non-constant expression.", var_name.c_str());
+                    return false;
+                }
+            } else {
+                // 原有的检查逻辑
+                if (!init_expr_ast_node->blockInsts.getInsts().empty()) {
+                    minic_log(LOG_ERROR, "Initializer for global variable '%s' is not a simple constant expression (generated instructions).", var_name.c_str());
+                    return false;
+                }
+                global_const_initializer = dynamic_cast<Constant*>(init_expr_ast_node->val);
+                if (!global_const_initializer) {
+                    minic_log(LOG_ERROR, "Initializer for global variable '%s' is not a compile-time constant.", var_name.c_str());
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Create the variable memory location (local or global)
+    var_mem_location = module->newVarValue(var_type, var_name, global_const_initializer);
+
+    if (!var_mem_location) {
+        minic_log(LOG_ERROR, "Failed to allocate memory or create variable '%s'.", var_name.c_str());
+        return false;
+    }
+    
+    // Assign the memory location (AllocaInst or GlobalVariable) as the value of the ID/ARRAY_DEF node
+    id_or_array_node->val = var_mem_location;
+    // Also for the VAR_DECL node itself.
+    node->val = var_mem_location;
+
+    // If it's a local variable AND has an initializer, generate store instruction
+    if (module->getCurrentFunction() != nullptr && has_initializer) {
+        // init_expr_ast_node is already visited and its val is set
+        Value* init_val_raw = init_expr_ast_node->val;
+        Value* value_to_store = dereferenceIfPointer(node, init_val_raw); 
+        if (!value_to_store) {
+            minic_log(LOG_ERROR, "Failed to obtain value to store for local variable initializer of '%s'.", var_name.c_str());
+            return false;
+        }
+
+        MoveInstruction* store_inst = new MoveInstruction(module->getCurrentFunction(), var_mem_location, value_to_store);
+        
+        // Add instructions from initializer expression evaluation (already part of 'node->blockInsts' via dereferenceIfPointer)
+        // then add the store instruction.
+        node->blockInsts.addInst(init_expr_ast_node->blockInsts);
+        node->blockInsts.addInst(store_inst);
+    } else if (module->getCurrentFunction() == nullptr && has_initializer) {
+        // For globals with a valid constant initializer, the initialization is part of GlobalVariable.
+        // Add instructions from init_expr_ast_node->blockInsts (should be empty for simple constants)
+        // This is mostly for completeness, as an error would have been raised if blockInsts wasn't empty.
+        node->blockInsts.addInst(init_expr_ast_node->blockInsts);
+    }
+    // If it's an array (global or local) without an initializer, it's just allocated.
+    // If it's a simple variable (global or local) without an initializer, it's just allocated (global zero-initialized by default by convention in C).
+
+    return true;
+}
+
+/// @brief 整数乘法AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_mul(ast_node * node)
+{
+    ast_node * src1_node = node->sons[0];
+    ast_node * src2_node = node->sons[1];
+
+    // 乘法节点，左结合，先计算左节点，后计算右节点
+
+    // 乘法的左边操作数
+    ast_node * left = ir_visit_ast_node(src1_node);
+    if (!left) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 乘法的右边操作数
+    ast_node * right = ir_visit_ast_node(src2_node);
+    if (!right) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* leftVal = dereferenceIfPointer(node, left->val);
+    Value* rightVal = dereferenceIfPointer(node, right->val);
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+
+    BinaryInstruction * mulInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                      IRInstOperator::IRINST_OP_MUL_I,
+                                                      leftVal,
+                                                      rightVal,
+                                                      IntegerType::getTypeInt());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(mulInst);
+
+    node->val = mulInst;
+
+    return true;
+}
+
+/// @brief 整数除法AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_div(ast_node * node)
+{
+    ast_node * src1_node = node->sons[0];
+    ast_node * src2_node = node->sons[1];
+
+    // 除法节点，左结合，先计算左节点，后计算右节点
+
+    // 除法的左边操作数
+    ast_node * left = ir_visit_ast_node(src1_node);
+    if (!left) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 除法的右边操作数
+    ast_node * right = ir_visit_ast_node(src2_node);
+    if (!right) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* leftVal = dereferenceIfPointer(node, left->val);
+    Value* rightVal = dereferenceIfPointer(node, right->val);
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+
+    BinaryInstruction * divInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                      IRInstOperator::IRINST_OP_DIV_I,
+                                                      leftVal,
+                                                      rightVal,
+                                                      IntegerType::getTypeInt());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(divInst);
+
+    node->val = divInst;
+
+    return true;
+}
+
+/// @brief 整数求余AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_mod(ast_node * node)
+{
+    ast_node * src1_node = node->sons[0];
+    ast_node * src2_node = node->sons[1];
+
+    // 求余节点，左结合，先计算左节点，后计算右节点
+
+    // 求余的左边操作数
+    ast_node * left = ir_visit_ast_node(src1_node);
+    if (!left) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 求余的右边操作数
+    ast_node * right = ir_visit_ast_node(src2_node);
+    if (!right) {
+        // 某个变量没有定值
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* leftVal = dereferenceIfPointer(node, left->val);
+    Value* rightVal = dereferenceIfPointer(node, right->val);
+
+    // 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
+
+    BinaryInstruction * modInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                      IRInstOperator::IRINST_OP_MOD_I,
+                                                      leftVal,
+                                                      rightVal,
+                                                      IntegerType::getTypeInt());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(modInst);
+
+    node->val = modInst;
+
+    return true;
+}
+
+/// @brief 生成唯一的标签名
+/// @param prefix 标签前缀
+/// @return 生成的标签名
+std::string IRGenerator::generateUniqueLabel(const std::string& prefix)
+{
+    return prefix + std::to_string(label_counter++);
+}
+
+/// @brief 通用关系表达式处理函数
+/// @param node AST节点
+/// @param op 关系运算符
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_rel_operation(ast_node * node, IRInstOperator op)
+{
+    // 安全检查：确保node和函数指针有效
+    if (!node || node->sons.size() < 2 || !module || !module->getCurrentFunction()) {
+        minic_log(LOG_ERROR, "关系运算处理时参数无效");
+        return false;
+    }
+
+    ast_node * src1_node = node->sons[0];
+    ast_node * src2_node = node->sons[1];
+
+    // 关系表达式，左结合，先计算左节点，后计算右节点
+
+    // 左操作数
+    ast_node * left = ir_visit_ast_node(src1_node);
+    if (!left || !left->val) {
+        // 某个变量没有定值
+        minic_log(LOG_ERROR, "关系运算左操作数处理失败");
+        return false;
+    }
+
+    // 右操作数
+    ast_node * right = ir_visit_ast_node(src2_node);
+    if (!right || !right->val) {
+        // 某个变量没有定值
+        minic_log(LOG_ERROR, "关系运算右操作数处理失败");
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* leftVal = dereferenceIfPointer(node, left->val);
+    Value* rightVal = dereferenceIfPointer(node, right->val);
+
+    // 生成比较指令
+    BinaryInstruction * cmpInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                       op,
+                                                       leftVal,
+                                                       rightVal,
+                                                       IntegerType::getTypeBool());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(left->blockInsts);
+    node->blockInsts.addInst(right->blockInsts);
+    node->blockInsts.addInst(cmpInst);
+
+    node->val = cmpInst;
+
+    // 如果父节点已经设置了真假出口标签，则生成条件跳转指令
+    if (!node->true_label.empty() && !node->false_label.empty()) {
+        // 创建条件分支指令
+        BranchInstruction * branchInst = new BranchInstruction(module->getCurrentFunction(),
+                                                             cmpInst,
+                                                             node->true_label,
+                                                             node->false_label);
+        node->blockInsts.addInst(branchInst);
+    }
+
+    return true;
+}
+
+/// @brief 整数大于比较AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_gt(ast_node * node)
+{
+    return ir_rel_operation(node, IRInstOperator::IRINST_OP_GT_I);
+}
+
+/// @brief 整数大于等于比较AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_ge(ast_node * node)
+{
+    return ir_rel_operation(node, IRInstOperator::IRINST_OP_GE_I);
+}
+
+/// @brief 整数小于比较AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_lt(ast_node * node)
+{
+    return ir_rel_operation(node, IRInstOperator::IRINST_OP_LT_I);
+}
+
+/// @brief 整数小于等于比较AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_le(ast_node * node)
+{
+    return ir_rel_operation(node, IRInstOperator::IRINST_OP_LE_I);
+}
+
+/// @brief 整数等于比较AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_eq(ast_node * node)
+{
+    return ir_rel_operation(node, IRInstOperator::IRINST_OP_EQ_I);
+}
+
+/// @brief 整数不等于比较AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_ne(ast_node * node)
+{
+    return ir_rel_operation(node, IRInstOperator::IRINST_OP_NE_I);
+}
+
+/// @brief IF语句处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_if(ast_node * node)
+{
+    // 安全检查：确保node和函数指针有效
+    if (!node || node->sons.size() < 2 || !module || !module->getCurrentFunction()) {
+        minic_log(LOG_ERROR, "if语句处理时参数无效");
+        return false;
+    }
+
+    // IF语句有两个孩子：条件表达式和语句体
+    ast_node * condition_node = node->sons[0];
+    ast_node * then_node = node->sons[1];
+
+    // 生成唯一标签
+    std::string true_label = generateUniqueLabel(".L");    // IF分支的标签
+    std::string end_label = generateUniqueLabel(".L");     // 结束标签
+
+    // 设置条件表达式的真假出口标签
+    if (condition_node) {
+        condition_node->true_label = true_label;
+        condition_node->false_label = end_label;
+    } else {
+        minic_log(LOG_ERROR, "if语句条件表达式为空");
+        return false;
+    }
+
+    // 处理条件表达式
+    ast_node * condition = ir_visit_ast_node(condition_node);
+    if (!condition) {
+        minic_log(LOG_ERROR, "if语句条件表达式处理失败");
+        return false;
+    }
+
+    // 将条件表达式生成的指令添加到当前节点的指令列表中
+    node->blockInsts.addInst(condition->blockInsts);
+
+    // 如果条件表达式本身没有生成跳转指令（例如 if(x)），则我们在这里生成
+    if (!node->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, condition->val, true_label, end_label);
+    }
+
+    // 真出口标签 (IF分支)
+    LabelInstruction * true_label_inst = new LabelInstruction(module->getCurrentFunction(), true_label);
+    if (!true_label_inst) {
+        minic_log(LOG_ERROR, "if语句真分支标签创建失败");
+        return false;
+    }
+
+    // 处理IF语句体
+    ast_node * then_stmt = ir_visit_ast_node(then_node);
+    if (!then_stmt) {
+        minic_log(LOG_ERROR, "if语句主体处理失败");
+        return false;
+    }
+
+    // 结束标签
+    LabelInstruction * end_label_inst = new LabelInstruction(module->getCurrentFunction(), end_label);
+    if (!end_label_inst) {
+        minic_log(LOG_ERROR, "if语句结束标签创建失败");
+        return false;
+    }
+
+    // 组装指令
+    node->blockInsts.addInst(true_label_inst);         // IF分支标签
+    node->blockInsts.addInst(then_stmt->blockInsts);   // IF分支指令
+    node->blockInsts.addInst(end_label_inst);          // 结束标签
+
+    return true;
+}
+
+/// @brief IF-ELSE语句处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_if_else(ast_node * node)
+{
+    // 安全检查：确保node和函数指针有效
+    if (!node || node->sons.size() < 3 || !module || !module->getCurrentFunction()) {
+        minic_log(LOG_ERROR, "if-else语句处理时参数无效");
+        return false;
+    }
+
+    // IF-ELSE语句有三个孩子：条件表达式、IF语句体和ELSE语句体
+    ast_node * condition_node = node->sons[0];
+    ast_node * then_node = node->sons[1];
+    ast_node * else_node = node->sons[2];
+
+    // 安全检查：确保所有子节点都有效
+    if (!condition_node || !then_node || !else_node) {
+        minic_log(LOG_ERROR, "if-else语句子节点无效");
+        return false;
+    }
+
+    // 生成唯一标签
+    std::string true_label = generateUniqueLabel(".L");    // IF分支的标签
+    std::string false_label = generateUniqueLabel(".L");   // ELSE分支的标签
+    std::string end_label = generateUniqueLabel(".L");     // 结束标签
+
+    // 设置条件表达式的真假出口标签
+    condition_node->true_label = true_label;
+    condition_node->false_label = false_label;
+
+    // 处理条件表达式
+    ast_node * condition = ir_visit_ast_node(condition_node);
+    if (!condition) {
+        minic_log(LOG_ERROR, "if-else语句条件表达式处理失败");
+        return false;
+    }
+
+    // 将条件表达式生成的指令添加到当前节点的指令列表中
+    node->blockInsts.addInst(condition->blockInsts);
+
+    // 如果条件表达式本身没有生成跳转指令（例如 if(x)），则我们在这里生成
+    if (!node->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, condition->val, true_label, false_label);
+    }
+
+    // 真出口标签 (IF分支)
+    LabelInstruction * true_label_inst = new LabelInstruction(module->getCurrentFunction(), true_label);
+    if (!true_label_inst) {
+        minic_log(LOG_ERROR, "if-else语句真分支标签创建失败");
+        return false;
+    }
+
+    // 处理IF语句体
+    ast_node * then_stmt = ir_visit_ast_node(then_node);
+    if (!then_stmt) {
+        minic_log(LOG_ERROR, "if-else语句IF部分处理失败");
+        return false;
+    }
+
+    // IF分支执行完后跳转到结束标签
+    GotoInstruction * goto_end_inst = new GotoInstruction(module->getCurrentFunction(), end_label);
+    if (!goto_end_inst) {
+        minic_log(LOG_ERROR, "if-else语句跳转指令创建失败");
+        return false;
+    }
+
+    // 假出口标签 (ELSE分支)
+    LabelInstruction * false_label_inst = new LabelInstruction(module->getCurrentFunction(), false_label);
+    if (!false_label_inst) {
+        minic_log(LOG_ERROR, "if-else语句假分支标签创建失败");
+        return false;
+    }
+
+    // 处理ELSE语句体 
+    ast_node * else_stmt = ir_visit_ast_node(else_node);
+    if (!else_stmt) {
+        minic_log(LOG_ERROR, "if-else语句ELSE部分处理失败");
+        return false;
+    }
+
+    // 结束标签
+    LabelInstruction * end_label_inst = new LabelInstruction(module->getCurrentFunction(), end_label);
+    if (!end_label_inst) {
+        minic_log(LOG_ERROR, "if-else语句结束标签创建失败");
+        return false;
+    }
+
+    // 组装指令
+    node->blockInsts.addInst(true_label_inst);         // IF分支标签
+    node->blockInsts.addInst(then_stmt->blockInsts);   // IF分支指令
+    node->blockInsts.addInst(goto_end_inst);           // 跳转到结束
+    node->blockInsts.addInst(false_label_inst);        // ELSE分支标签
+    node->blockInsts.addInst(else_stmt->blockInsts);   // ELSE分支指令
+    node->blockInsts.addInst(end_label_inst);          // 结束标签
+
+    return true;
+}
+
+/// @brief 逻辑与运算AST节点翻译成线性中间IR，支持短路求值
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_and(ast_node * node)
+{
+    ast_node * left_node = node->sons[0];
+    ast_node * right_node = node->sons[1];
+    
+    std::string true_label_final = node->true_label;
+    std::string false_label_final = node->false_label;
+    bool in_expression_context = false;
+
+    // Determine if we are in a control-flow context or expression context.
+    if (true_label_final.empty() || false_label_final.empty()) {
+        in_expression_context = true;
+        true_label_final = generateUniqueLabel(".L");
+        false_label_final = generateUniqueLabel(".L");
+    }
+
+    std::string right_operand_label = generateUniqueLabel(".L_AND_RIGHT");
+
+    // --- Process left operand (A in A && B) ---
+    left_node->true_label = right_operand_label; // If true, check B
+    left_node->false_label = false_label_final;  // If false, short-circuit
+    ast_node * left = ir_visit_ast_node(left_node);
+    if (!left) return false;
+    
+    node->blockInsts.addInst(left->blockInsts);
+    // If the visited node hasn't terminated with a branch, add one.
+    if (!left->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, left->val, right_operand_label, false_label_final);
+    }
+
+    // --- Process right operand (B in A && B) ---
+    node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), right_operand_label));
+
+    right_node->true_label = true_label_final;   // If true, the whole expression is true
+    right_node->false_label = false_label_final; // If false, the whole expression is false
+    ast_node * right = ir_visit_ast_node(right_node);
+    if (!right) return false;
+    node->blockInsts.addInst(right->blockInsts);
+    if (!right->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, right->val, true_label_final, false_label_final);
+    }
+
+    // If we need to produce a 0/1 value for an expression context.
+    if (in_expression_context) {
+        std::string end_label = generateUniqueLabel(".L_AND_END");
+        Value* result_var = module->newVarValue(IntegerType::getTypeInt());
+        node->val = result_var;
+
+        // True case: land here, set result to 1, and jump to the end.
+        node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), true_label_final));
+        node->blockInsts.addInst(new MoveInstruction(module->getCurrentFunction(), result_var, module->newConstInt(1)));
+        node->blockInsts.addInst(new GotoInstruction(module->getCurrentFunction(), end_label));
+
+        // False case: land here, set result to 0.
+        node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), false_label_final));
+        node->blockInsts.addInst(new MoveInstruction(module->getCurrentFunction(), result_var, module->newConstInt(0)));
+        
+        // End label for the expression.
+        node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), end_label));
+    }
+    
+    return true;
+}
+
+/// @brief 逻辑或运算AST节点翻译成线性中间IR，支持短路求值
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_or(ast_node * node)
+{
+    ast_node * left_node = node->sons[0];
+    ast_node * right_node = node->sons[1];
+    
+    std::string true_label_final = node->true_label;
+    std::string false_label_final = node->false_label;
+    bool in_expression_context = false;
+
+    if (true_label_final.empty() || false_label_final.empty()) {
+        in_expression_context = true;
+        true_label_final = generateUniqueLabel(".L");
+        false_label_final = generateUniqueLabel(".L");
+    }
+
+    std::string right_operand_label = generateUniqueLabel(".L_OR_RIGHT");
+
+    // --- Process left operand (A in A || B) ---
+    left_node->true_label = true_label_final;   // If true, short-circuit
+    left_node->false_label = right_operand_label; // If false, check B
+    ast_node * left = ir_visit_ast_node(left_node);
+    if (!left) return false;
+    node->blockInsts.addInst(left->blockInsts);
+    if (!left->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, left->val, true_label_final, right_operand_label);
+    }
+
+    // --- Process right operand (B in A || B) ---
+    node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), right_operand_label));
+
+    right_node->true_label = true_label_final;   // If true, the whole expression is true
+    right_node->false_label = false_label_final; // If false, the whole expression is false
+    ast_node * right = ir_visit_ast_node(right_node);
+    if (!right) return false;
+    node->blockInsts.addInst(right->blockInsts);
+    if (!right->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, right->val, true_label_final, false_label_final);
+    }
+
+    if (in_expression_context) {
+        std::string end_label = generateUniqueLabel(".L_OR_END");
+        Value* result_var = module->newVarValue(IntegerType::getTypeInt());
+        node->val = result_var;
+
+        // True case
+        node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), true_label_final));
+        node->blockInsts.addInst(new MoveInstruction(module->getCurrentFunction(), result_var, module->newConstInt(1)));
+        node->blockInsts.addInst(new GotoInstruction(module->getCurrentFunction(), end_label));
+
+        // False case
+        node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), false_label_final));
+        node->blockInsts.addInst(new MoveInstruction(module->getCurrentFunction(), result_var, module->newConstInt(0)));
+        
+        // End
+        node->blockInsts.addInst(new LabelInstruction(module->getCurrentFunction(), end_label));
+    }
+    
+    return true;
+}
+
+/// @brief 逻辑非运算AST节点翻译成线性中间IR
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_not(ast_node * node)
+{
+    // 获取操作数
+    ast_node * operand_node = node->sons[0];
+
+    // 如果父节点设置了真假出口标签，需要交换传递给子节点
+    if (!node->true_label.empty() && !node->false_label.empty()) {
+        // 逻辑非运算会将真假出口互换
+        operand_node->true_label = node->false_label;
+        operand_node->false_label = node->true_label;
+        
+        // 处理操作数
+        ast_node * operand = ir_visit_ast_node(operand_node);
+        if (!operand) {
+            // 操作数计算失败
+            return false;
+        }
+        
+        // 直接使用操作数的指令
+        node->blockInsts.addInst(operand->blockInsts);
+        node->val = operand->val;
+        
+        return true;
+    }
+    
+    // 先计算操作数
+    ast_node * operand = ir_visit_ast_node(operand_node);
+    if (!operand) {
+        // 操作数计算失败
+        return false;
+    }
+
+    // 如果操作数是指针类型，需要先解引用
+    Value* operandVal = dereferenceIfPointer(node, operand->val);
+
+    // 创建常量0
+    ConstInt * zero = new ConstInt(0);
+    
+    // 创建比较指令：operand == 0
+    BinaryInstruction * cmpInst = new BinaryInstruction(module->getCurrentFunction(),
+                                                     IRInstOperator::IRINST_OP_EQ_I,
+                                                     operandVal,
+                                                     zero,
+                                                     IntegerType::getTypeBool());
+
+    // 创建临时变量保存IR的值，以及线性IR指令
+    node->blockInsts.addInst(operand->blockInsts);
+    node->blockInsts.addInst(cmpInst);
+
+    node->val = cmpInst;
+
+    // 如果设置了真假出口标签，则生成条件跳转指令
+    if (!node->true_label.empty() && !node->false_label.empty()) {
+        // 创建条件分支指令
+        BranchInstruction * branchInst = new BranchInstruction(module->getCurrentFunction(),
+                                                              cmpInst,
+                                                              node->true_label,
+                                                              node->false_label);
+        node->blockInsts.addInst(branchInst);
+    }
+
+    return true;
+}
+
+/// @brief WHILE循环语句处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_while(ast_node * node)
+{
+    // 安全检查：确保node和函数指针有效
+    if (!node || node->sons.size() < 2 || !module || !module->getCurrentFunction()) {
+        minic_log(LOG_ERROR, "while语句处理时参数无效");
+        return false;
+    }
+
+    // WHILE语句有两个孩子：条件表达式和循环体
+    ast_node * condition_node = node->sons[0];
+    ast_node * body_node = node->sons[1];
+
+    // 生成唯一的循环标签
+    std::string loop_start_label = generateUniqueLabel(".L"); // This is the label for condition check
+    std::string loop_body_label = generateUniqueLabel(".L");  // This is where body starts if condition true
+    std::string loop_end_label = generateUniqueLabel(".L");   // This is where loop exits if condition false
+
+    // Store the actual IR labels on the AST_OP_WHILE node for break/continue
+    node->loop_start_label = loop_start_label; // For continue: jump to condition check
+    node->loop_end_label = loop_end_label;     // For break: jump to loop exit
+
+    // 设置条件表达式的真假出口标签，以便条件表达式内部的跳转指令使用它们
+    if (condition_node) {
+        condition_node->true_label = loop_body_label;  // 条件为真，跳转到循环体
+        condition_node->false_label = loop_end_label; // 条件为假，跳转到循环结束
+    } else {
+        minic_log(LOG_ERROR, "while语句条件表达式为空");
+        return false;
+    }
+
+    // 循环开始标签指令
+    LabelInstruction * loop_start_inst = new LabelInstruction(module->getCurrentFunction(), loop_start_label);
+    if (!loop_start_inst) {
+        minic_log(LOG_ERROR, "while循环开始标签创建失败");
+        return false;
+    }
+
+    // 处理条件表达式
+    ast_node * condition = ir_visit_ast_node(condition_node);
+    if (!condition) {
+        minic_log(LOG_ERROR, "while循环条件表达式处理失败");
+        return false;
+    }
+
+    // 将条件表达式生成的指令添加到当前节点的指令列表中
+    node->blockInsts.addInst(condition->blockInsts);
+
+    // 如果条件表达式本身没有生成跳转指令（例如 while(x)），则我们在这里生成
+    if (!node->blockInsts.hasTerminalInst()) {
+        generateBranchOnValue(node, module, condition->val, loop_body_label, loop_end_label);
+    }
+
+    // 循环体标签指令
+    LabelInstruction * loop_body_inst = new LabelInstruction(module->getCurrentFunction(), loop_body_label);
+    if (!loop_body_inst) {
+        minic_log(LOG_ERROR, "while循环体标签创建失败");
+        return false;
+    }
+
+    // 处理循环体
+    ast_node * body = ir_visit_ast_node(body_node);
+    if (!body) {
+        minic_log(LOG_ERROR, "while循环体处理失败");
+        return false;
+    }
+
+    // 循环结束标签指令
+    LabelInstruction * loop_end_inst = new LabelInstruction(module->getCurrentFunction(), loop_end_label);
+    if (!loop_end_inst) {
+        minic_log(LOG_ERROR, "while循环结束标签创建失败");
+        return false;
+    }
+
+    // 组装指令
+    node->blockInsts.addInst(loop_start_inst);
+    node->blockInsts.addInst(loop_body_inst);          // 循环体标签
+    node->blockInsts.addInst(body->blockInsts);        // 循环体指令
+    node->blockInsts.addInst(new GotoInstruction(module->getCurrentFunction(), loop_start_label)); // 循环体执行完后跳转到循环开始
+    node->blockInsts.addInst(loop_end_inst);            // 循环结束标签
+
+    return true;
+}
+
+/// @brief 数组访问处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_array_access(ast_node * node)
+{
+    // 验证子节点数量
+    if (node->sons.size() < 2) {
+        minic_log(LOG_ERROR, "数组访问节点子节点数量不足");
+        return false;
+    }
+
+    // 获取数组名
+    ast_node* arrayNode = node->sons[0];
+    if (arrayNode->node_type != ast_operator_type::AST_OP_LEAF_VAR_ID) {
+        minic_log(LOG_ERROR, "数组名必须是标识符");
+        return false;
+    }
+    
+    std::string arrayName = arrayNode->name;
+    Value* arrayVar = module->findVarValue(arrayName);
+    if (!arrayVar) {
+        minic_log(LOG_ERROR, "未定义的数组变量: %s", arrayName.c_str());
+        return false;
+    }
+    
+    // 检查是否为数组类型或指针类型（数组形参）
+    Type* varType = arrayVar->getType();
+    bool isArrayType = varType->isArrayType();
+    bool isPointerType = varType->isPointerType();
+    
+    if (!isArrayType && !isPointerType) {
+        minic_log(LOG_ERROR, "变量不是数组或指针类型: %s", arrayName.c_str());
+        return false;
+    }
+    
+    // 检查是否为函数形参（从函数形参列表中查找ArrayParameterType）
+    ArrayParameterType* arrayParamType = nullptr;
+    Function* currentFunc = module->getCurrentFunction();
+    if (currentFunc) {
+        for (auto param : currentFunc->getParams()) {
+            if (param->getName() == arrayName) {
+                arrayParamType = dynamic_cast<ArrayParameterType*>(param->getType());
+            break;
+        }
+        }
+    }
+    
+    // 添加调试信息
+    minic_log(LOG_INFO, "数组访问 %s: isArrayType=%d, isPointerType=%d, arrayParamType=%p", 
+              arrayName.c_str(), isArrayType, isPointerType, arrayParamType);
+    
+    // 处理数组访问 - 优先检查数组形参
+    if (arrayParamType) {
+        // 数组形参访问，使用ArrayParameterType的维度信息
+        minic_log(LOG_INFO, "使用ArrayParameterType处理数组形参 %s，索引数量: %zu", arrayName.c_str(), node->sons.size() - 1);
+        
+        std::vector<int32_t> dimensionSizes = arrayParamType->getDimensionSizes();
+        Type* baseElementType = const_cast<Type*>(arrayParamType->getElementType());
+        
+        // 验证索引数量
+        if (node->sons.size() < 2) {
+            minic_log(LOG_ERROR, "数组访问必须至少有一个索引");
+        return false;
+    }
+
+        if (node->sons.size() > 2) {
+            // 多维数组形参访问
+            minic_log(LOG_INFO, "进入多维数组形参访问分支，数组: %s，索引数量: %zu", arrayName.c_str(), node->sons.size() - 1);
+            
+            if (node->sons.size() - 1 != dimensionSizes.size()) {
+                minic_log(LOG_ERROR, "数组索引数量与维度不匹配");
+        return false;
+    }
+
+            // 计算总偏移量（按行优先顺序）
+            Value* totalOffset = nullptr;
+            
+            for (size_t i = 0; i < dimensionSizes.size(); i++) {
+                ast_node* indexNode = node->sons[i + 1];
+                if (!ir_visit_ast_node(indexNode)) {
+                    return false;
+                }
+                
+                Value* indexVal = indexNode->val;
+                if (!indexVal) {
+                    minic_log(LOG_ERROR, "无效的数组索引");
+                    return false;
+                }
+                
+                node->blockInsts.addInst(indexNode->blockInsts);
+                
+                // 计算当前维度的乘数（后续所有维度的大小的乘积）
+                int32_t multiplier = 1;
+                for (size_t j = i + 1; j < dimensionSizes.size(); j++) {
+                    multiplier *= dimensionSizes[j];
+                }
+                
+                Value* currentOffset;
+                if (multiplier == 1) {
+                    // 最后一个维度，直接使用索引
+                    currentOffset = indexVal;
+                } else {
+                    // 索引乘以乘数
+                    Value* multiplierVal = module->newConstInt(multiplier);
+                    BinaryInstruction* mulInst = new BinaryInstruction(
+                        module->getCurrentFunction(),
+                        IRInstOperator::IRINST_OP_MUL_I,
+                        indexVal,
+                        multiplierVal,
+                        IntegerType::getTypeInt()
+                    );
+                    node->blockInsts.addInst(mulInst);
+                    currentOffset = mulInst;
+                }
+                
+                // 累加到总偏移量
+                if (totalOffset == nullptr) {
+                    totalOffset = currentOffset;
+                } else {
+                    BinaryInstruction* addInst = new BinaryInstruction(
+                        module->getCurrentFunction(),
+                        IRInstOperator::IRINST_OP_ADD_I,
+                        totalOffset,
+                        currentOffset,
+                        IntegerType::getTypeInt()
+                    );
+                    node->blockInsts.addInst(addInst);
+                    totalOffset = addInst;
+                }
+            }
+            
+            // 计算最终地址：baseAddr + totalOffset * sizeof(element)
+            Value* elementSize = module->newConstInt(4); // 假设int为4字节
+            BinaryInstruction* offsetMulInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_MUL_I,
+                totalOffset,
+                elementSize,
+                IntegerType::getTypeInt()
+            );
+            node->blockInsts.addInst(offsetMulInst);
+            
+            BinaryInstruction* finalAddrInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_ADD_I,
+                arrayVar,
+                offsetMulInst,
+                const_cast<PointerType*>(PointerType::get(baseElementType))
+            );
+            node->blockInsts.addInst(finalAddrInst);
+            
+            // 检查是否需要解引用
+            bool needDereference = true;
+            if (node->parent && node->parent->node_type == ast_operator_type::AST_OP_ASSIGN) {
+                if (node->parent->sons.size() > 0 && node->parent->sons[0] == node) {
+                    needDereference = false;
+                }
+            }
+            
+            if (needDereference) {
+                // 用于表达式中的读取，需要解引用
+                Value* tempVar = module->newVarValue(baseElementType);
+                MoveInstruction* loadInst = new MoveInstruction(module->getCurrentFunction(), tempVar, finalAddrInst);
+                node->blockInsts.addInst(loadInst);
+                node->val = tempVar;
+                node->type = baseElementType;
+            } else {
+                // 用于赋值的左值，返回地址
+                node->val = finalAddrInst;
+                node->type = const_cast<PointerType*>(PointerType::get(baseElementType));
+            }
+        } else {
+            // 一维数组形参访问
+            minic_log(LOG_INFO, "进入一维数组形参访问分支，数组: %s，索引数量: %zu", arrayName.c_str(), node->sons.size() - 1);
+            
+            ast_node* firstIndexNode = node->sons[1];
+            if (!ir_visit_ast_node(firstIndexNode)) {
+                return false;
+            }
+            
+            Value* firstIndexVal = firstIndexNode->val;
+            if (!firstIndexVal) {
+                minic_log(LOG_ERROR, "无效的数组索引");
+                return false;
+            }
+            
+            node->blockInsts.addInst(firstIndexNode->blockInsts);
+            
+            // 计算最终地址：baseAddr + index * sizeof(element)
+            Value* elementSize = module->newConstInt(4); // 假设int为4字节
+            BinaryInstruction* offsetMulInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_MUL_I,
+                firstIndexVal,
+                elementSize,
+                IntegerType::getTypeInt()
+            );
+            node->blockInsts.addInst(offsetMulInst);
+            
+            BinaryInstruction* finalAddrInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_ADD_I,
+                arrayVar,
+                offsetMulInst,
+                const_cast<PointerType*>(PointerType::get(baseElementType))
+            );
+            node->blockInsts.addInst(finalAddrInst);
+            
+            // 检查是否需要解引用
+            bool needDereference = true;
+            if (node->parent && node->parent->node_type == ast_operator_type::AST_OP_ASSIGN) {
+                if (node->parent->sons.size() > 0 && node->parent->sons[0] == node) {
+                    needDereference = false;
+                }
+            }
+            
+            if (needDereference) {
+                // 用于表达式中的读取，需要解引用
+                Value* tempVar = module->newVarValue(baseElementType);
+                MoveInstruction* loadInst = new MoveInstruction(module->getCurrentFunction(), tempVar, finalAddrInst);
+                node->blockInsts.addInst(loadInst);
+                node->val = tempVar;
+                node->type = baseElementType;
+            } else {
+                // 用于赋值的左值，返回地址
+                node->val = finalAddrInst;
+                node->type = const_cast<PointerType*>(PointerType::get(baseElementType));
+            }
+        }
+    } else if (isArrayType) {
+        // 普通数组访问
+        ArrayType* arrayType = dynamic_cast<ArrayType*>(varType);
+        std::vector<int> dimensions = arrayType->getDimensions();
+        
+        // 验证索引数量 - 支持数组降维访问
+        size_t indexCount = node->sons.size() - 1;
+        if (indexCount > dimensions.size()) {
+            minic_log(LOG_ERROR, "数组索引数量超过维度数量");
+            return false;
+        }
+        
+        // 计算数组元素地址
+        Value* baseAddr = arrayVar;
+        Value* offset = nullptr;
+        
+        // 只处理提供的索引数量
+        for (size_t i = 0; i < indexCount; i++) {
+            ast_node* indexNode = node->sons[i + 1];
+            
+            // 处理索引表达式
+            if (!ir_visit_ast_node(indexNode)) {
+                return false;
+            }
+            
+            Value* indexVal = indexNode->val;
+            if (!indexVal) {
+                minic_log(LOG_ERROR, "无效的数组索引");
+                return false;
+            }
+            
+            // 计算当前维度的偏移量
+            int dimSize = 1;
+            for (size_t j = i + 1; j < dimensions.size(); j++) {
+                dimSize *= dimensions[j];
+            }
+            
+            // 创建维度大小常量
+            Value* dimSizeVal = module->newConstInt(dimSize);
+            
+            // 计算当前维度偏移：index * dimSize
+            BinaryInstruction* mulInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_MUL_I,
+                indexVal,
+                dimSizeVal,
+                IntegerType::getTypeInt()
+            );
+            node->blockInsts.addInst(indexNode->blockInsts);
+            node->blockInsts.addInst(mulInst);
+            
+            // 累加偏移量
+            if (offset == nullptr) {
+                offset = mulInst;
+            } else {
+                BinaryInstruction* addInst = new BinaryInstruction(
+                    module->getCurrentFunction(),
+                    IRInstOperator::IRINST_OP_ADD_I,
+                    offset,
+                    mulInst,
+                    IntegerType::getTypeInt()
+                );
+                node->blockInsts.addInst(addInst);
+                offset = addInst;
+            }
+        }
+        
+        // 计算最终地址：baseAddr + offset * sizeof(element)
+        Value* elementSize = module->newConstInt(4); // 假设int为4字节
+        BinaryInstruction* offsetMulInst = new BinaryInstruction(
+            module->getCurrentFunction(),
+            IRInstOperator::IRINST_OP_MUL_I,
+            offset,
+            elementSize,
+            IntegerType::getTypeInt()
+        );
+        node->blockInsts.addInst(offsetMulInst);
+        
+        BinaryInstruction* finalAddrInst = new BinaryInstruction(
+            module->getCurrentFunction(),
+            IRInstOperator::IRINST_OP_ADD_I,
+            baseAddr,
+            offsetMulInst,
+            const_cast<PointerType*>(PointerType::get(arrayType->getElementType()))
+        );
+        node->blockInsts.addInst(finalAddrInst);
+        
+        // 确定结果类型：如果是完全索引，返回元素类型；否则返回降维后的数组类型
+        Type* resultType;
+        if (indexCount == dimensions.size()) {
+            // 完全索引，返回元素类型
+            resultType = arrayType->getElementType();
+        } else {
+            // 数组降维访问，创建降维后的数组类型
+            std::vector<int> remainingDimensions(dimensions.begin() + indexCount, dimensions.end());
+            resultType = new ArrayType(arrayType->getElementType(), remainingDimensions);
+        }
+        
+        // 检查是否需要解引用
+        bool needDereference = true;
+        if (node->parent && node->parent->node_type == ast_operator_type::AST_OP_ASSIGN) {
+            if (node->parent->sons.size() > 0 && node->parent->sons[0] == node) {
+                needDereference = false;
+            }
+        }
+        
+        // 检查是否作为函数参数使用
+        bool isUsedAsFunctionParam = false;
+        if (node->parent && node->parent->node_type == ast_operator_type::AST_OP_FUNC_CALL) {
+            // 如果父节点是函数调用，且当前节点不是第一个子节点（函数名），则是参数
+            if (node->parent->sons.size() > 1 && node != node->parent->sons[0]) {
+                isUsedAsFunctionParam = true;
+            }
+        }
+        
+        if (needDereference && indexCount == dimensions.size() && !isUsedAsFunctionParam) {
+            // 完全索引且用于表达式中的读取，需要解引用
+            Value* tempVar = module->newVarValue(resultType);
+            MoveInstruction* loadInst = new MoveInstruction(module->getCurrentFunction(), tempVar, finalAddrInst);
+            node->blockInsts.addInst(loadInst);
+            node->val = tempVar;
+            node->type = resultType;
+        } else {
+            // 用于赋值的左值、数组降维访问或函数参数，返回地址
+            if (indexCount < dimensions.size() || isUsedAsFunctionParam) {
+                // 数组降维访问或函数参数，直接返回地址，不解引用
+                node->val = finalAddrInst;
+                node->type = resultType;
+            } else {
+                node->val = finalAddrInst;
+                node->type = const_cast<PointerType*>(PointerType::get(resultType));
+            }
+        }
+    } else if (isPointerType || arrayParamType) {
+        // 数组形参访问（指针类型或ArrayParameterType）
+        Type* baseElementType;
+        if (arrayParamType) {
+            baseElementType = const_cast<Type*>(arrayParamType->getElementType());
+        } else {
+            PointerType* ptrType = dynamic_cast<PointerType*>(varType);
+            baseElementType = const_cast<Type*>(ptrType->getPointeeType());
+        }
+
+        // 验证索引数量
+        if (node->sons.size() < 2) {
+            minic_log(LOG_ERROR, "数组访问必须至少有一个索引");
+            return false;
+        }
+        
+        if (arrayParamType && node->sons.size() > 2) {
+            // 多维数组形参访问，使用维度信息
+            std::vector<int32_t> dimensionSizes = arrayParamType->getDimensionSizes();
+            
+            if (node->sons.size() - 1 != dimensionSizes.size()) {
+                minic_log(LOG_ERROR, "数组索引数量与维度不匹配");
+                return false;
+            }
+            
+            // 计算总偏移量（按行优先顺序）
+            Value* totalOffset = nullptr;
+            
+            for (size_t i = 0; i < dimensionSizes.size(); i++) {
+                ast_node* indexNode = node->sons[i + 1];
+                if (!ir_visit_ast_node(indexNode)) {
+                    return false;
+                }
+                
+                Value* indexVal = indexNode->val;
+                if (!indexVal) {
+                    minic_log(LOG_ERROR, "无效的数组索引");
+                    return false;
+                }
+                
+                node->blockInsts.addInst(indexNode->blockInsts);
+                
+                // 计算当前维度的乘数（后续所有维度的大小的乘积）
+                int32_t multiplier = 1;
+                for (size_t j = i + 1; j < dimensionSizes.size(); j++) {
+                    multiplier *= dimensionSizes[j];
+                }
+                
+                Value* currentOffset;
+                if (multiplier == 1) {
+                    // 最后一个维度，直接使用索引
+                    currentOffset = indexVal;
+                } else {
+                    // 索引乘以乘数
+                    Value* multiplierVal = module->newConstInt(multiplier);
+                    BinaryInstruction* mulInst = new BinaryInstruction(
+                        module->getCurrentFunction(),
+                        IRInstOperator::IRINST_OP_MUL_I,
+                        indexVal,
+                        multiplierVal,
+                        IntegerType::getTypeInt()
+                    );
+                    node->blockInsts.addInst(mulInst);
+                    currentOffset = mulInst;
+                }
+                
+                // 累加到总偏移量
+                if (totalOffset == nullptr) {
+                    totalOffset = currentOffset;
+                } else {
+                    BinaryInstruction* addInst = new BinaryInstruction(
+                        module->getCurrentFunction(),
+                        IRInstOperator::IRINST_OP_ADD_I,
+                        totalOffset,
+                        currentOffset,
+                        IntegerType::getTypeInt()
+                    );
+                    node->blockInsts.addInst(addInst);
+                    totalOffset = addInst;
+                }
+            }
+            
+            // 计算最终地址：baseAddr + totalOffset * sizeof(element)
+            Value* elementSize = module->newConstInt(4); // 假设int为4字节
+            BinaryInstruction* offsetMulInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_MUL_I,
+                totalOffset,
+                elementSize,
+                IntegerType::getTypeInt()
+            );
+            node->blockInsts.addInst(offsetMulInst);
+            
+            BinaryInstruction* finalAddrInst = new BinaryInstruction(
+                module->getCurrentFunction(),
+                IRInstOperator::IRINST_OP_ADD_I,
+                arrayVar,
+                offsetMulInst,
+                const_cast<PointerType*>(PointerType::get(baseElementType))
+            );
+            node->blockInsts.addInst(finalAddrInst);
+            
+            // 检查是否需要解引用
+            bool needDereference = true;
+            if (node->parent && node->parent->node_type == ast_operator_type::AST_OP_ASSIGN) {
+                if (node->parent->sons.size() > 0 && node->parent->sons[0] == node) {
+                    needDereference = false;
+                }
+            }
+            
+            if (needDereference) {
+                // 用于表达式中的读取，需要解引用
+                Value* tempVar = module->newVarValue(baseElementType);
+                MoveInstruction* loadInst = new MoveInstruction(module->getCurrentFunction(), tempVar, finalAddrInst);
+                node->blockInsts.addInst(loadInst);
+                node->val = tempVar;
+                node->type = baseElementType;
+            } else {
+                // 用于赋值的左值，返回地址
+                node->val = finalAddrInst;
+                node->type = const_cast<PointerType*>(PointerType::get(baseElementType));
+            }
+        } else {
+            // 一维数组形参或其他情况
+            minic_log(LOG_ERROR, "暂不支持的数组访问情况");
+            return false;
+        }
+    } else {
+        minic_log(LOG_ERROR, "变量不是数组或指针类型: %s", arrayName.c_str());
+        return false;
+    }
+
+    return true;
+}
+
+/// @brief 数组维度处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_array_dimensions(ast_node * node)
+{
+    // 数组维度节点包含多个维度大小的字面量节点
+    for (auto son : node->sons) {
+        // 处理每个维度
+        if (!ir_visit_ast_node(son)) {
+            minic_log(LOG_ERROR, "数组维度处理失败");
+        return false;
+        }
+    }
+    
+    return true;
+}
+
+/// @brief 数组定义处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_array_def(ast_node * node)
+{
+    // 数组定义节点包含变量名和维度信息
+    if (node->sons.size() != 2) {
+        minic_log(LOG_ERROR, "数组定义节点子节点数量错误");
+        return false;
+    }
+    
+    // 获取变量名节点
+    ast_node * var_node = node->sons[0];
+    if (!var_node || var_node->node_type != ast_operator_type::AST_OP_LEAF_VAR_ID) {
+        minic_log(LOG_ERROR, "数组定义缺少变量名");
+        return false;
+    }
+    
+    // 获取维度节点
+    ast_node * dim_node = node->sons[1];
+    if (!dim_node || dim_node->node_type != ast_operator_type::AST_OP_ARRAY_DIMENSIONS) {
+        minic_log(LOG_ERROR, "数组定义缺少维度信息");
+        return false;
+    }
+
+    // 处理维度节点
+    if (!ir_visit_ast_node(dim_node)) {
+        return false;
+    }
+
+    // 获取维度大小
+    std::vector<int32_t> dimensions;
+    for (auto son : dim_node->sons) {
+        if (!ir_visit_ast_node(son)) {
+            return false;
+        }
+        
+        Instanceof(constInt, ConstInt *, son->val);
+        if (!constInt) {
+            minic_log(LOG_ERROR, "数组维度必须是常量");
+            return false;
+        }
+        
+        dimensions.push_back(constInt->getVal());
+    }
+    
+    // 创建数组类型（假设元素类型为int32）
+    Type * elementType = IntegerType::getTypeInt();
+    ArrayType * arrayType = ArrayType::get(elementType, dimensions);
+    
+    // 设置节点类型
+    node->type = arrayType;
+    var_node->type = arrayType;
+
+    return true;
+}
+
+/// @brief 数组形参处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_func_formal_param_array(ast_node * node)
+{
+    // 数组形参节点包含三个子节点：类型、名称、维度
+    if (node->sons.size() != 3) {
+        minic_log(LOG_ERROR, "数组形参节点子节点数量错误");
+        return false;
+    }
+    
+    Function* currentFunc = module->getCurrentFunction();
+    if (!currentFunc) {
+        minic_log(LOG_ERROR, "处理数组形参时无法获取当前函数");
+        return false;
+    }
+    
+    // 获取类型节点、名称节点和维度节点
+    ast_node* typeNode = node->sons[0];
+    ast_node* nameNode = node->sons[1];
+    ast_node* dimNode = node->sons[2];
+    
+    // 处理类型节点
+    if (!ir_visit_ast_node(typeNode)) {
+        return false;
+    }
+    
+    // 获取参数名（不需要处理名称节点，直接获取名称）
+    std::string paramName = nameNode->name;
+    
+    // 处理维度节点 - 获取各个维度的大小
+    if (!ir_visit_ast_node(dimNode)) {
+        return false;
+    }
+    
+    // 收集维度大小
+    std::vector<int32_t> dimensionSizes;
+    for (auto dimSizeNode : dimNode->sons) {
+        if (!ir_visit_ast_node(dimSizeNode)) {
+            return false;
+        }
+        
+        // 对于数组形参，第一个维度可以为空（如 int a[][5]）
+        // 其他维度必须指定大小
+        if (dimSizeNode->node_type == ast_operator_type::AST_OP_LEAF_LITERAL_UINT) {
+            // 有具体大小
+            Instanceof(constInt, ConstInt *, dimSizeNode->val);
+            if (!constInt) {
+                minic_log(LOG_ERROR, "数组形参维度必须是常量");
+                return false;
+            }
+            dimensionSizes.push_back(constInt->getVal());
+        } else {
+            // 第一个维度可以为空，用0表示
+            if (dimensionSizes.empty()) {
+                dimensionSizes.push_back(0); // 第一个维度为空
+            } else {
+                minic_log(LOG_ERROR, "数组形参除第一个维度外其他维度必须指定大小");
+                return false;
+            }
+        }
+    }
+    
+    // 创建数组形参类型，传递维度大小向量
+    Type * elementType = IntegerType::getTypeInt();
+    ArrayParameterType * paramType = new ArrayParameterType(elementType, dimensionSizes);
+    
+    // 为形参创建形参变量
+    FormalParam* paramVar = new FormalParam(paramType, paramName);
+    if (!paramVar) {
+        minic_log(LOG_ERROR, "创建数组形参变量失败: %s", paramName.c_str());
+        return false;
+    }
+    
+    // 向函数的形参列表中添加形参
+    currentFunc->getParams().push_back(paramVar);
+    
+    // 在当前作用域中创建局部变量作为形参（数组类型）
+    // 对于多维数组形参，局部变量应该保持与形参相同的维度信息
+    std::vector<int32_t> localDimensions = dimensionSizes; // 使用相同的维度信息
+    ArrayType* localVarType = ArrayType::get(elementType, localDimensions);
+    Value* localVar = module->newVarValue(localVarType, paramName);
+    if (!localVar) {
+        minic_log(LOG_ERROR, "创建数组形参对应的局部变量失败: %s", paramName.c_str());
+        return false;
+    }
+    
+    // 创建从形参到局部变量的赋值指令
+    MoveInstruction* moveInst = new MoveInstruction(currentFunc, localVar, paramVar);
+    if (!moveInst) {
+        minic_log(LOG_ERROR, "创建数组形参赋值指令失败: %s", paramName.c_str());
+        return false;
+    }
+    
+    // 将赋值指令添加到节点的指令列表中
+    node->blockInsts.addInst(moveInst);
+    
+    // 确认变量确实添加到了作用域中
+    Value* testVar = module->findVarValue(paramName);
+    if (!testVar) {
+        minic_log(LOG_ERROR, "数组形参未成功添加到作用域: %s", paramName.c_str());
+        return false;
+    }
+    
+    return true;
+}
+
+/// @brief BREAK语句处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_break(ast_node * node)
+{
+    std::string loop_start_label_found, loop_end_label_found;
+    if (find_enclosing_loop_labels(node, loop_start_label_found, loop_end_label_found)) {
+        node->blockInsts.addInst(new GotoInstruction(module->getCurrentFunction(), loop_end_label_found));
+        return true;
+    } else {
+        long long line = node->line_no > 0 ? node->line_no : 0;
+        minic_log(LOG_ERROR, "Break statement not within a loop (or loop labels not found) at line %lld.", line);
+        return false;
+    }
+}
+
+/// @brief CONTINUE语句处理函数
+/// @param node AST节点
+/// @return 翻译是否成功，true：成功，false：失败
+bool IRGenerator::ir_continue(ast_node * node)
+{
+    std::string loop_start_label_found, loop_end_label_found;
+    if (find_enclosing_loop_labels(node, loop_start_label_found, loop_end_label_found)) {
+        node->blockInsts.addInst(new GotoInstruction(module->getCurrentFunction(), loop_start_label_found));
+        return true;
+    } else {
+        long long line = node->line_no > 0 ? node->line_no : 0;
+        minic_log(LOG_ERROR, "Continue statement not within a loop (or loop labels not found) at line %lld.", line);
+        return false;
+    }
+}

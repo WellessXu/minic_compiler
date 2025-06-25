@@ -41,6 +41,8 @@ struct KeywordToken {
 static KeywordToken allKeywords[] = {
     {"int", RDTokenType::T_INT},
     {"return", RDTokenType::T_RETURN},
+    {"if", RDTokenType::T_IF},
+    {"else", RDTokenType::T_ELSE},
 };
 
 /// @brief 在标识符中检查是否时关键字，若是关键字则返回对应关键字的Token，否则返回T_ID
@@ -56,6 +58,26 @@ static RDTokenType getKeywordToken(std::string id)
     }
     // 如果不再allkeywords中，说明是标识符
     return RDTokenType::T_ID;
+}
+
+/// @brief 检查下一个字符是否匹配指定字符
+/// @param expected 期望的字符
+/// @return true: 匹配，false: 不匹配
+static bool is_next(char expected)
+{
+    int c = fgetc(rd_filein);
+    if (c == expected) {
+        return true;
+    }
+    // 不匹配则回退
+    ungetc(c, rd_filein);
+    return false;
+}
+
+/// @brief 读取下一个字符并前进
+static void nextChar()
+{
+    // 这个函数仅在is_next返回true后调用，所以不需要做任何事情
 }
 
 /// @brief 词法文法，获取下一个Token
@@ -205,10 +227,63 @@ int rd_flex()
         tokenKind = RDTokenType::T_SUB;
 		// 存储字符-
         tokenValue = "-";
+    } else if (c == '*') {
+        // 识别字符*
+        tokenKind = RDTokenType::T_MUL;
+        // 存储字符*
+        tokenValue = "*";
+    } else if (c == '/') {
+        // 需要判断是否是注释
+        c = fgetc(rd_filein);
+        if (c == '/') {
+            // 单行注释，读取直到行尾
+            while ((c = fgetc(rd_filein)) != EOF && c != '\n');
+            
+            if (c == '\n') {
+                rd_line_no++;
+                ungetc(c, rd_filein);
+            }
+            
+            // 递归调用自身获取下一个真正的Token
+            return rd_flex();
+        } else if (c == '*') {
+            // 多行注释，读取直到*/
+            int prev = 0;
+            while ((c = fgetc(rd_filein)) != EOF) {
+                if (c == '\n') {
+                    rd_line_no++;
+                } else if (prev == '*' && c == '/') {
+                    // 注释结束
+                    break;
+                }
+                prev = c;
+            }
+            
+            // 递归调用自身获取下一个真正的Token
+            return rd_flex();
+        } else {
+            // 不是注释，是除法运算符
+            ungetc(c, rd_filein);
+            tokenKind = RDTokenType::T_DIV;
+            // 存储字符/
+            tokenValue = "/";
+        }
+    } else if (c == '%') {
+        // 识别字符%
+        tokenKind = RDTokenType::T_MOD;
+        // 存储字符%
+        tokenValue = "%";
     } else if (c == '=') {
-        // 识别字符=
-        tokenKind = RDTokenType::T_ASSIGN;
-    }  else if (c == ',') {
+        // 检查是否是等号
+        if (is_next('=')) {
+            nextChar();
+            tokenKind = RDTokenType::T_EQ;
+            tokenValue = "==";
+        } else {
+            tokenKind = RDTokenType::T_ASSIGN;
+            tokenValue = "=";
+        }
+    } else if (c == ',') {
         // 识别字符;
         tokenKind = RDTokenType::T_COMMA;
 		// 存储字符,
@@ -247,6 +322,61 @@ int rd_flex()
             // 设置类型与行号
             rd_lval.type.type = BasicType::TYPE_INT;
             rd_lval.type.lineno = rd_line_no;
+        }
+    } else if (c == '>') {
+        // 检查是否是>=
+        if (is_next('=')) {
+            nextChar();
+            tokenKind = RDTokenType::T_GE;
+            tokenValue = ">=";
+        } else {
+            tokenKind = RDTokenType::T_GT;
+            tokenValue = ">";
+        }
+    } else if (c == '<') {
+        // 检查是否是<=
+        if (is_next('=')) {
+            nextChar();
+            tokenKind = RDTokenType::T_LE;
+            tokenValue = "<=";
+        } else {
+            tokenKind = RDTokenType::T_LT;
+            tokenValue = "<";
+        }
+    } else if (c == '!') {
+        // 检查是否是!=
+        if (is_next('=')) {
+            nextChar();
+            tokenKind = RDTokenType::T_NE;
+            tokenValue = "!=";
+        } else {
+            // 逻辑非运算符
+            tokenKind = RDTokenType::T_NOT;
+            tokenValue = "!";
+        }
+    } else if (c == '&') {
+        // 检查是否是&&
+        if (is_next('&')) {
+            nextChar();
+            tokenKind = RDTokenType::T_AND;
+            tokenValue = "&&";
+        } else {
+            // 错误的token
+            printf("Line(%lld): 无效的字符 &\n", (long long)rd_line_no);
+            tokenKind = RDTokenType::T_ERR;
+            tokenValue = "&";
+        }
+    } else if (c == '|') {
+        // 检查是否是||
+        if (is_next('|')) {
+            nextChar();
+            tokenKind = RDTokenType::T_OR;
+            tokenValue = "||";
+        } else {
+            // 错误的token
+            printf("Line(%lld): 无效的字符 |\n", (long long)rd_line_no);
+            tokenKind = RDTokenType::T_ERR;
+            tokenValue = "|";
         }
     } else {
         printf("Line(%lld): Invalid char %s\n", (long long) rd_line_no, tokenValue.c_str());

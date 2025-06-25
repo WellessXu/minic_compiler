@@ -30,10 +30,27 @@ GotoInstruction::GotoInstruction(Function * _func, Instruction * _target)
     target = static_cast<LabelInstruction *>(_target);
 }
 
+///
+/// @brief 无条件跳转指令的构造函数，使用标签名称
+/// @param _func 所属函数
+/// @param _label_name 目标标签名称
+///
+GotoInstruction::GotoInstruction(Function * _func, std::string _label_name)
+    : Instruction(_func, IRInstOperator::IRINST_OP_GOTO, VoidType::getType()),
+      label_name(_label_name)
+{
+}
+
 /// @brief 转换成IR指令文本
 void GotoInstruction::toString(std::string & str)
 {
-    str = "br label " + target->getIRName();
+    if (target) {
+        str = "br label " + target->getIRName();
+    } else if (!label_name.empty()) {
+        str = "br label " + label_name;
+    } else {
+        str = "br <unknown>";
+    }
 }
 
 ///

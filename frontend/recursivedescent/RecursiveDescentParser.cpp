@@ -34,7 +34,12 @@ static int errno_num = 0;
 static RDTokenType lookaheadTag = RDTokenType::T_EMPTY;
 
 static ast_node * Block();
+static ast_node * ifStatement();
 static ast_node * expr();
+static ast_node * logicOrExp();
+static ast_node * logicAndExp();
+static ast_node * relExp();
+static ast_node * addExp();
 
 ///
 /// @brief 继续检查LookAhead指向的记号是否是T，用于符号的FIRST集合或Follow集合判断
@@ -204,7 +209,18 @@ static ast_node * unaryExp()
         ast_node * operand = unaryExp();
         
         // 创建求负运算节点
-        node = ast_node::New(ast_operator_type::AST_OP_NEG, operand, nullptr, nullptr);
+        node = create_contain_node(ast_operator_type::AST_OP_NEG, operand);
+    } else if (F(T_NOT)) {
+        // 逻辑非运算 unaryExp: T_NOT unaryExp
+        
+        // 跳过当前记号，指向下一个记号
+        advance();
+        
+        // 识别操作数
+        ast_node * operand = unaryExp();
+        
+        // 创建逻辑非运算节点
+        node = create_contain_node(ast_operator_type::AST_OP_NOT, operand);
     } else if (F(T_DIGIT)) {
 
         // 无符号整数，primaryExp: T_DIGIT
@@ -241,6 +257,71 @@ static ast_node * unaryExp()
 }
 
 ///
+/// @brief 乘除模运算符, 其文法为mulOp : T_MUL | T_DIV | T_MOD;
+/// @return ast_operator_type AST中节点的运算符
+///
+ast_operator_type mulOp()
+{
+    ast_operator_type type = ast_operator_type::AST_OP_MAX;
+
+    if (F(T_MUL)) {
+        type = ast_operator_type::AST_OP_MUL;
+        // 跳过当前的记号，指向下一个记号
+        advance();
+    } else if (F(T_DIV)) {
+        type = ast_operator_type::AST_OP_DIV;
+        // 跳过当前的记号，指向下一个记号
+        advance();
+    } else if (F(T_MOD)) {
+        type = ast_operator_type::AST_OP_MOD;
+        // 跳过当前的记号，指向下一个记号
+        advance();
+    }
+
+    return type;
+}
+
+///
+/// @brief 乘除模表达式，文法 mulExp : unaryExp (mulOp unaryExp)*
+/// 其中的*表示闭包，闭包的就是循环
+///
+/// @return ast_node*
+///
+static ast_node * mulExp()
+{
+    // 识别第一个unaryExp
+    ast_node * left_node = unaryExp();
+    if (!left_node) {
+        // 非法的一元表达式
+        return nullptr;
+    }
+
+    // 识别闭包(mulOp unaryExp)*，循环
+    // 循环退出条件，1) 不是二元乘除模运算符， 2) 语法错误
+    for (;;) {
+
+        // 获取乘除模运算符
+        ast_operator_type op = mulOp();
+        if (ast_operator_type::AST_OP_MAX == op) {
+            // 不是乘除模运算符则正常结束
+            break;
+        }
+
+        // 获取右侧表达式
+        ast_node * right_node = unaryExp();
+        if (!right_node) {
+            // 二元乘除模运算没有合法的右侧表达式
+            break;
+        }
+
+        // 创建二元运算符节点
+        left_node = create_contain_node(op, left_node, right_node);
+    }
+
+    return left_node;
+}
+
+///
 /// @brief 加减运算符, 其文法为addOp : T_ADD | T_SUB;
 /// @return ast_operator_type AST中节点的运算符
 ///
@@ -266,21 +347,21 @@ ast_operator_type addOp()
 }
 
 ///
-/// @brief 加减表达式，文法 addExp : unaryExp (addOp unaryExp)*
+/// @brief 加减表达式，文法 addExp : mulExp (addOp mulExp)*
 /// 其中的*表示闭包，闭包的就是循环
 ///
 /// @return ast_node*
 ///
 static ast_node * addExp()
 {
-    // 识别第一个unaryExp
-    ast_node * left_node = unaryExp();
+    // 识别第一个mulExp
+    ast_node * left_node = mulExp();
     if (!left_node) {
-        // 非法的一元表达式
+        // 非法的乘除模表达式
         return nullptr;
     }
 
-    // 识别闭包(addOp unaryExp)*，循环
+    // 识别闭包(addOp mulExp)*，循环
     // 循环退出条件，1) 不是二元加减运算符， 2) 语法错误
     for (;;) {
 
@@ -293,7 +374,7 @@ static ast_node * addExp()
         }
 
         // 获取右侧表达式
-        ast_node * right_node = unaryExp();
+        ast_node * right_node = mulExp();
         if (!right_node) {
 
             // 二元加减运算没有合法的右侧表达式
@@ -307,11 +388,11 @@ static ast_node * addExp()
     return left_node;
 }
 
-/// @brief 表达式文法 expr : addExp, 表达式目前只支持加法与减法运算
+/// @brief 表达式文法 expr : logicOrExp, 表达式支持逻辑或、逻辑与、关系运算、加法、减法、乘法、除法、求余和一元运算
 /// @return AST的节点
 static ast_node * expr()
 {
-    return addExp();
+    return logicOrExp();
 }
 
 /// @brief returnStatement -> T_RETURN expr T_SEMICOLON
@@ -383,7 +464,7 @@ static ast_node * assignExprStmt()
 /// statement:T_RETURN expr T_SEMICOLON | lVal T_ASSIGN expr T_SEMICOLON | block | expr? T_SEMICOLON
 /// 需要注意的是赋值语句与表达式语句的FIRST集合有交集，都有T_ID
 /// 必须进行语法改造使得满足LL(1)文法的要求，改造后的文法：
-/// statement: returnStatement | block | T_SEMICOLON | assignExprStmt T_SEMICOLON
+/// statement: returnStatement | block | T_SEMICOLON | assignExprStmt T_SEMICOLON | ifStatement
 /// returnStatement : T_RETURN expr T_SEMICOLON
 /// assignExprStmt : expr assignExprStmtTail
 /// assignExprStmtTail : T_ASSIGN expr | ε
@@ -409,6 +490,9 @@ static ast_node * statement()
 
         // 空语句，识别产生式statement: T_SEMICOLON
         advance();
+    } else if (F(T_IF)) {
+        // if语句，识别产生式statement: ifStatement
+        node = ifStatement();
     } else if (F(T_ID) _(T_L_PAREN) _(T_DIGIT)) {
 
         // 赋值语句，statement -> assignExprStmt T_SEMICOLON
@@ -426,6 +510,58 @@ static ast_node * statement()
     }
 
     return node;
+}
+
+/// @brief if语句的语法分析，文法: ifStatement -> T_IF T_L_PAREN expr T_R_PAREN statement (T_ELSE statement)?
+/// @return AST的节点
+static ast_node * ifStatement()
+{
+    // 匹配if关键字
+    if (!match(T_IF)) {
+        return nullptr;
+    }
+
+    // 匹配左括号
+    if (!match(T_L_PAREN)) {
+        semerror("if语句缺少左括号");
+        return nullptr;
+    }
+
+    // 解析条件表达式
+    ast_node * condition = expr();
+    if (!condition) {
+        semerror("if语句缺少条件表达式");
+        return nullptr;
+    }
+
+    // 匹配右括号
+    if (!match(T_R_PAREN)) {
+        semerror("if语句缺少右括号");
+        return nullptr;
+    }
+
+    // 解析then语句
+    ast_node * then_stmt = statement();
+    if (!then_stmt) {
+        semerror("if语句缺少then语句");
+        return nullptr;
+    }
+
+    // 检查是否有else部分
+    if (match(T_ELSE)) {
+        // 解析else语句
+        ast_node * else_stmt = statement();
+        if (!else_stmt) {
+            semerror("else后缺少语句");
+            return nullptr;
+        }
+
+        // 创建if-else节点
+        return create_contain_node(ast_operator_type::AST_OP_IF_ELSE, condition, then_stmt, else_stmt);
+    } else {
+        // 创建if节点（没有else）
+        return create_contain_node(ast_operator_type::AST_OP_IF, condition, then_stmt);
+    }
 }
 
 ///
@@ -709,4 +845,164 @@ ast_node * rd_parse()
     }
 
     return astRoot;
+}
+
+///
+ast_operator_type relOp()
+{
+    ast_operator_type type = ast_operator_type::AST_OP_MAX;
+
+    if (F(T_GT)) {
+        type = ast_operator_type::AST_OP_GT;
+        advance();
+    } else if (F(T_GE)) {
+        type = ast_operator_type::AST_OP_GE;
+        advance();
+    } else if (F(T_LT)) {
+        type = ast_operator_type::AST_OP_LT;
+        advance();
+    } else if (F(T_LE)) {
+        type = ast_operator_type::AST_OP_LE;
+        advance();
+    } else if (F(T_EQ)) {
+        type = ast_operator_type::AST_OP_EQ;
+        advance();
+    } else if (F(T_NE)) {
+        type = ast_operator_type::AST_OP_NE;
+        advance();
+    }
+
+    return type;
+}
+
+///
+/// @brief 关系表达式，文法 relExp : addExp (relOp addExp)?
+///
+/// @return ast_node*
+///
+static ast_node * relExp()
+{
+    // 识别第一个addExp
+    ast_node * left_node = addExp();
+    if (!left_node) {
+        // 非法的加减表达式
+        return nullptr;
+    }
+
+    // 识别关系运算符和右侧加减表达式
+    ast_operator_type op = relOp();
+    if (ast_operator_type::AST_OP_MAX == op) {
+        // 不是关系运算符则直接返回左侧节点
+        return left_node;
+    }
+
+    // 获取右侧表达式
+    ast_node * right_node = addExp();
+    if (!right_node) {
+        // 关系运算没有合法的右侧表达式，直接返回左侧节点
+        return left_node;
+    }
+
+    // 创建关系运算符节点
+    return create_contain_node(op, left_node, right_node);
+}
+
+///
+/// @brief 逻辑或运算符, 其文法为 T_OR
+/// @return 返回逻辑或运算符节点类型
+///
+static ast_operator_type logicOrOp()
+{
+    if (F(T_OR)) {
+        advance();
+        return ast_operator_type::AST_OP_OR;
+    }
+    return ast_operator_type::AST_OP_MAX;
+}
+
+///
+/// @brief 逻辑或表达式，文法 logicOrExp : logicAndExp (T_OR logicAndExp)*
+/// 支持短路求值（第一个操作数为真时不计算第二个操作数）
+/// @return 逻辑或表达式节点
+///
+static ast_node * logicOrExp()
+{
+    // 识别第一个logicAndExp
+    ast_node * left_node = logicAndExp();
+    if (!left_node) {
+        // 非法的逻辑与表达式
+        return nullptr;
+    }
+
+    // 识别闭包(logicOrOp logicAndExp)*
+    for (;;) {
+        // 获取逻辑或运算符
+        ast_operator_type op = logicOrOp();
+        if (ast_operator_type::AST_OP_MAX == op) {
+            // 不是逻辑或运算符则正常结束
+            break;
+        }
+
+        // 获取右侧表达式
+        ast_node * right_node = logicAndExp();
+        if (!right_node) {
+            // 二元逻辑或运算没有合法的右侧表达式
+            break;
+        }
+
+        // 创建逻辑或运算符节点
+        left_node = create_contain_node(op, left_node, right_node);
+    }
+
+    return left_node;
+}
+
+///
+/// @brief 逻辑与运算符, 其文法为 T_AND
+/// @return 返回逻辑与运算符节点类型
+///
+static ast_operator_type logicAndOp()
+{
+    if (F(T_AND)) {
+        advance();
+        return ast_operator_type::AST_OP_AND;
+    }
+    return ast_operator_type::AST_OP_MAX;
+}
+
+///
+/// @brief 逻辑与表达式，文法 logicAndExp : relExp (T_AND relExp)*
+/// 支持短路求值（第一个操作数为假时不计算第二个操作数）
+/// @return 逻辑与表达式节点
+///
+static ast_node * logicAndExp()
+{
+    // 识别第一个relExp
+    ast_node * left_node = relExp();
+    if (!left_node) {
+        // 非法的关系表达式
+        return nullptr;
+    }
+
+    // 识别闭包(logicAndOp relExp)*
+    for (;;) {
+        // 获取逻辑与运算符
+        ast_operator_type op = logicAndOp();
+        if (ast_operator_type::AST_OP_MAX == op) {
+            // 不是逻辑与运算符则正常结束
+            break;
+        }
+
+        // 获取右侧表达式
+        ast_node * right_node = relExp();
+        if (!right_node) {
+            // 二元逻辑与运算没有合法的右侧表达式
+            break;
+        }
+
+        // 创建逻辑与运算符节点
+        left_node = create_contain_node(op, left_node, right_node);
+    }
+
+    return left_node;
 }

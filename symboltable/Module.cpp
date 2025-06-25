@@ -18,6 +18,8 @@
 #include "ScopeStack.h"
 #include "Common.h"
 #include "VoidType.h"
+#include "Types/ArrayParameterType.h"
+#include "Types/PointerType.h"
 
 Module::Module(std::string _name) : name(_name)
 {
@@ -30,6 +32,23 @@ Module::Module(std::string _name) : name(_name)
     // 加入内置函数putint
     (void) newFunction("putint", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
     (void) newFunction("getint", IntegerType::getTypeInt(), {}, true);
+    // 加入内置函数putch
+    (void) newFunction("putch", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
+    
+    // 添加其他std.c中的函数
+    // int getch() 
+    (void) newFunction("getch", IntegerType::getTypeInt(), {}, true);
+    
+    // int getarray(int a[]) - 使用数组形参类型
+    ArrayParameterType* arrayParamType = new ArrayParameterType(IntegerType::getTypeInt(), {0});
+    (void) newFunction("getarray", IntegerType::getTypeInt(), 
+                      {new FormalParam{arrayParamType, "a"}}, true);
+    
+    // void putarray(int n, int * d) - 使用指针类型
+    const PointerType* intPtrType = PointerType::get(IntegerType::getTypeInt());
+    (void) newFunction("putarray", VoidType::getType(), 
+                      {new FormalParam{IntegerType::getTypeInt(), "n"},
+                       new FormalParam{const_cast<PointerType*>(intPtrType), "d"}}, true);
 }
 
 /// @brief 进入作用域，如进入函数体块、语句块等
@@ -179,7 +198,7 @@ ConstInt * Module::findConstInt(int32_t val)
 /// @param type 变量类型
 /// @param name 变量ID 局部变量时可以为空，目的为了SSA时创建临时的局部变量，
 /// @return nullptr则说明变量已存在，否则为新建的变量
-Value * Module::newVarValue(Type * type, std::string name)
+Value * Module::newVarValue(Type * type, std::string name, Constant* globalInitializer)
 {
     Value * retVal;
     std::string varName;
@@ -212,10 +231,11 @@ Value * Module::newVarValue(Type * type, std::string name)
         retVal = currentFunc->newLocalVarValue(type, name, scope_level);
 
     } else {
-        retVal = newGlobalVariable(type, name);
+        // 使用支持初始化器的全局变量创建方法
+        retVal = newGlobalVariable(type, name, globalInitializer);
     }
 
-    // 增加做作用域中
+    // 增加到作用域中
     scopeStack->insertValue(retVal);
 
     return retVal;
@@ -234,15 +254,15 @@ Value * Module::findVarValue(std::string name)
     return tempValue;
 }
 
-///
 /// @brief 新建全局变量，要求name必须有效，并且加入到全局符号表中。不检查是否现有的符号表中是否存在。
 /// @param type 类型
 /// @param name 名字
+/// @param initializer 初始化器（可选）
 /// @return Value* 全局变量
 ///
-GlobalVariable * Module::newGlobalVariable(Type * type, std::string name)
+GlobalVariable * Module::newGlobalVariable(Type * type, std::string name, Constant* initializer)
 {
-    GlobalVariable * val = new GlobalVariable(type, name);
+    GlobalVariable * val = new GlobalVariable(type, name, initializer);
 
     insertGlobalValueDirectly(val);
 
@@ -313,7 +333,7 @@ void Module::outputIR(const std::string & filePath)
         return;
     }
 
-    // 全局变量遍历输出对应的declare指令
+    // 全局变量遍历输出对应的定义指令
     for (auto var: globalVariableVector) {
 
         std::string str;

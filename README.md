@@ -1,3 +1,21 @@
+./build/minic -S -T -o ./tests/test1-1.png ./tests/test1-1.c
+
+./build/minic -S -T -A -o ./tests/test1-1.png ./tests/test1-1.c
+
+./build/minic -S -T -D -o ./tests/test1-1.png ./tests/test1-1.c
+
+./build/minic -S -I -o ./tests/test1-1.ir ./tests/test1-1.c
+
+./build/minic -S -I -A -o ./tests/test1-1.ir ./tests/test1-1.c
+
+./build/minic -S -I -D -o ./tests/test1-1.ir ./tests/test1-1.c
+
+./build/minic -S -o ./tests/test1-1.s ./tests/test1-1.c
+
+./build/minic -S -A -o ./tests/test1-1.s ./tests/test1-1.c
+
+./build/minic -S -D -o ./tests/test1-1.s ./tests/test1-1.c
+
 # 1. MiniC编译器-表达式版
 
 ## 1.1. 编译器的功能
@@ -842,6 +860,7 @@ c
 ```shell
 cd build
 cpack --config CPackSourceConfig.cmake
+
 ```
 
 在build目录下默认会产生zip和tar.gz格式的文件。

@@ -34,6 +34,13 @@ public:
     ///
     GotoInstruction(Function * _func, Instruction * _target);
 
+    ///
+    /// @brief 无条件跳转指令的构造函数，使用标签名称
+    /// @param _func 所属函数
+    /// @param _label_name 目标标签名称
+    ///
+    GotoInstruction(Function * _func, std::string _label_name);
+
     /// @brief 转换成字符串
     void toString(std::string & str) override;
 
@@ -47,5 +54,10 @@ private:
     ///
     /// @brief 跳转到的目标Label指令
     ///
-    LabelInstruction * target;
+    LabelInstruction * target = nullptr;
+
+    ///
+    /// @brief 目标标签名称
+    ///
+    std::string label_name;
 };

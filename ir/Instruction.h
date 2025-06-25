@@ -58,6 +58,42 @@ enum class IRInstOperator : std::int8_t {
     /// @brief 实参ARG指令，单目运算
     IRINST_OP_ARG,
 
+    /// @brief 大于比较指令，二元运算
+    IRINST_OP_GT_I,
+
+    /// @brief 大于等于比较指令，二元运算
+    IRINST_OP_GE_I,
+
+    /// @brief 小于比较指令，二元运算
+    IRINST_OP_LT_I,
+
+    /// @brief 小于等于比较指令，二元运算
+    IRINST_OP_LE_I,
+
+    /// @brief 等于比较指令，二元运算
+    IRINST_OP_EQ_I,
+
+    /// @brief 不等于比较指令，二元运算
+    IRINST_OP_NE_I,
+
+    /// @brief 条件分支指令，三元运算
+    IRINST_OP_BC,
+
+    /// @brief 逻辑与指令，二元运算
+    IRINST_OP_AND_I,
+
+    /// @brief 逻辑或指令，二元运算
+    IRINST_OP_OR_I,
+
+    /// @brief 逻辑非指令，一元运算
+    IRINST_OP_NOT_I,
+
+    /// @brief 整数求负指令，一元运算
+    IRINST_OP_NEG_I,
+
+    /// @brief 数组元素地址计算指令（Get Element Pointer），用于多维数组访问
+    IRINST_OP_GEP,
+
     /* 后续可追加其他的IR指令 */
 
     /// @brief 最大指令码，也是无效指令
